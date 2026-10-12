@@ -86,7 +86,19 @@ By default a run deletes the previous report for each language it is about to me
 | Python | `coverage run` with pytest or unittest, then `coverage lcov` | `target/coverage/python/lcov.info` |
 | Lua | Lua 5.4 runs the Busted and LuaCov entrypoint modules with coverage and the LCOV reporter | `target/coverage/lua/lcov.info` |
 
-A missing tool or a failed test run leaves that language at N/A and still writes the snapshot. Pass `--coverage-command` to replace those defaults with one command of your own.
+For languages other than Lua, a missing tool or a failed test run leaves that language at N/A and still writes the snapshot. Pass `--coverage-command` to replace those defaults with one command of your own.
+
+## Coverage failure gate
+
+A custom `--coverage-command` that exits nonzero or cannot start stops the CLI before analysis and snapshot publication. Built-in Lua coverage also stops if Lua 5.4 is unavailable, Busted fails, LuaCov stats are missing, or LCOV conversion fails or produces no report. Diagnostics identify the failed stage, and the CLI exits **1**. A failed Busted run never proceeds to conversion, even when it leaves partial stats.
+
+On these failures, `.metrics/crap.edn` remains byte-for-byte unchanged if it already exists; otherwise no snapshot is created. The preserved snapshot describes an earlier run, so consumers must check the CLI result before treating it as current. Coverage artifacts are separate from this snapshot: the built-in Lua runner clears its report directory before running tests, and failed runs can leave partial stats or reports. Custom commands manage the artifacts they write; the failure gate does not restore them. `--use-existing-coverage` explicitly bypasses coverage execution.
+
+Custom command strings retain shell syntax and run from `--root`. Quote arguments for the platform shell (`cmd.exe` on native Windows, `/bin/sh` on POSIX); paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected native interpreter. Native Windows command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
+
+A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their existing warning-and-N/A behavior.
+
+On macOS, execution assumes Python 3.11+, a Lua 5.4 interpreter on PATH, and Busted, LuaCov, and `luacov-reporter-lcov` installed for that interpreter. Custom commands use the POSIX shell and built-in Lua uses native argument-vector execution. These macOS assumptions have not been runtime-validated.
 
 ## Windows
 

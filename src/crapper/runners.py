@@ -1,7 +1,7 @@
 """Run each language's coverage tool, then leave the reports for the loader.
 
-Failures are reported and do not stop analysis. A language with no coverage
-tool, or a failed run, keeps N/A coverage for its functions.
+Custom command and built-in Lua failures stop analysis via CoverageError.
+Other language runners report failures and retain their warning-only behavior.
 """
 
 from __future__ import annotations
@@ -22,6 +22,10 @@ _MAVEN = [
     "test",
     "org.jacoco:jacoco-maven-plugin:0.8.12:report",
 ]
+
+
+class CoverageError(RuntimeError):
+    """Coverage execution failed; analysis must not publish a snapshot."""
 
 
 def _warn(message: str) -> None:
@@ -611,23 +615,25 @@ def absolute_lcov_sources(report: Path, module: Path) -> None:
 
 
 def _record_lua_lcov(module: Path, code: int, stats: Path, report: Path, lcov_cmd: str | list[str]) -> None:
-    if not stats.exists():
-        _warn(f"Lua coverage exited {code} in {module}. Lua coverage will be N/A.")
-        return
-    lcov_code = run_shell(lcov_cmd, module)
-    if lcov_code != 0 or not report.is_file():
-        _warn(f"luacov -r lcov exited {lcov_code} in {module}. Lua coverage will be N/A.")
-        return
-    absolute_lcov_sources(report, module)
     if code != 0:
-        _warn(f"Lua tests exited {code} in {module}. Coverage was still recorded.")
+        raise CoverageError(f"Lua tests exited {code} in {module}.")
+    if not stats.is_file():
+        raise CoverageError(f"LuaCov stats missing after Lua tests in {module}: {stats}")
+    lcov_code = run_shell(lcov_cmd, module)
+    if lcov_code != 0:
+        raise CoverageError(f"LuaCov LCOV conversion exited {lcov_code} in {module}.")
+    if not report.is_file():
+        raise CoverageError(f"LuaCov LCOV report missing after conversion in {module}: {report}")
+    try:
+        absolute_lcov_sources(report, module)
+    except (OSError, UnicodeError) as exc:
+        raise CoverageError(f"LuaCov LCOV normalization failed in {module}: {exc}") from exc
 
 
 def _cover_lua(root: Path, files: list[Path]) -> None:
     lua = lua_interpreter()
     if lua is None:
-        _warn("No Lua 5.4 interpreter (lua5.4 or lua) on PATH. Lua coverage will be N/A.")
-        return
+        raise CoverageError("No Lua 5.4 interpreter (lua5.4 or lua) on PATH for Lua coverage.")
     for module in lua_roots(root, files):
         report = _coverage_report(root, module, "lua")
         _prepare_report(report)
@@ -645,7 +651,7 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> None:
     if command:
         code = run_shell(command, root)
         if code != 0:
-            _warn(f"Coverage command exited {code}. Coverage may be N/A.")
+            raise CoverageError(f"Coverage command exited {code} in {root}.")
         return
 
     languages = _languages_in(files)

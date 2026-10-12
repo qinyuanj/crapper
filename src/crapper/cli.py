@@ -12,7 +12,7 @@ from crapper.coverage import load_bundle
 from crapper.discover import is_test_file, iter_source_files, language_of
 from crapper.metrics import write_metrics
 from crapper.report import format_report
-from crapper.runners import run_coverage
+from crapper.runners import CoverageError, run_coverage
 
 HELP = """\
 Usage: crapper [options] [path-or-filter ...]
@@ -253,7 +253,11 @@ def run(argv: list[str] | None = None) -> int:
     bundle = None
     if not options.no_coverage:
         if not options.use_existing_coverage:
-            run_coverage(root, files, options.coverage_command)
+            try:
+                run_coverage(root, files, options.coverage_command)
+            except CoverageError as exc:
+                print(f"Coverage failed: {exc}", file=sys.stderr)
+                return 1
         bundle = load_bundle(root)
 
     entries = analyze_files(files, root, bundle)

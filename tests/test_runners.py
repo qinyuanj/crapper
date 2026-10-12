@@ -7,6 +7,7 @@ from pathlib import Path
 
 from crapper.discover import is_test_file
 from crapper.runners import (
+    CoverageError,
     _clean_clojure,
     _clean_dir,
     _coverage_report,
@@ -406,9 +407,9 @@ def test_python_lcov_warnings(tmp_path, monkeypatch, capsys):
     assert "Coverage was still recorded" in capsys.readouterr().err
 
 
-def test_custom_coverage_command_failure_is_reported(tmp_path, capsys):
-    run_coverage(tmp_path, [], "exit 9")
-    assert "exited 9" in capsys.readouterr().err
+def test_custom_coverage_command_failure_stops_execution(tmp_path):
+    with pytest.raises(CoverageError, match="Coverage command exited 9"):
+        run_coverage(tmp_path, [], "exit 9")
 
 
 def test_clojure_without_a_build_file_is_skipped(tmp_path, monkeypatch, capsys):

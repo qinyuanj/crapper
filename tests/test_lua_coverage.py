@@ -8,6 +8,7 @@ from crapper.analyze import analyze_files
 from crapper.coverage import load_bundle
 from crapper.discover import iter_source_files
 from crapper.runners import (
+    CoverageError,
     _clean_clojure,
     absolute_lcov_sources,
     lua_coverage_commands,
@@ -58,10 +59,10 @@ def test_lua_interpreter_none_when_no_lua54(monkeypatch):
     assert lua_interpreter() is None
 
 
-def test_missing_lua_leaves_coverage_na(tmp_path, monkeypatch, capsys):
+def test_missing_lua_stops_coverage(tmp_path, monkeypatch):
     monkeypatch.setattr("crapper.runners.lua_interpreter", lambda: None)
-    run_coverage(tmp_path, [_write(tmp_path, "a.lua")], None)
-    assert "Lua coverage will be N/A" in capsys.readouterr().err
+    with pytest.raises(CoverageError, match="No Lua 5.4 interpreter"):
+        run_coverage(tmp_path, [_write(tmp_path, "a.lua")], None)
     assert not (tmp_path / "target").exists()
 
 
