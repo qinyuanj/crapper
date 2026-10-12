@@ -280,6 +280,119 @@ def test_threshold_with_no_scores_does_not_call_max_on_an_empty_list(tmp_path):
     assert run(["--root", str(tmp_path), "--no-coverage", "--threshold", "1"]) == 0
 
 
+def test_business_roots_exclude_exact_directories_without_duplicate_metrics(tmp_path):
+    sources = {
+        "client/main.lua": "client_main",
+        "client/_trigger/event.lua": "client_trigger",
+        "common/shared.lua": "shared",
+        "server/main.lua": "server_main",
+        "server/_trigger/nested/event.lua": "server_trigger",
+        "server/_trigger_extra/event.lua": "trigger_extra",
+        "packages/vendor.lua": "package_vendor",
+    }
+    for path, name in sources.items():
+        _write(tmp_path, path, f"function {name}() return 1 end\n")
+    assert run([
+        "--root", str(tmp_path), "--no-coverage",
+        "--source-root", "client", "--source-root", "common",
+        "--source-root", "server", "--source-root", "server/_trigger_extra",
+        "--source-root", "packages",
+        "--exclude", "packages", "--exclude", "server/_trigger",
+    ]) == 0
+    text = (tmp_path / ".metrics/crap.edn").read_text(encoding="utf-8")
+    for name in ("client_main", "client_trigger", "shared", "server_main", "trigger_extra"):
+        assert text.count(f':name "{name}"') == 1
+    assert ':name "server_trigger"' not in text
+    assert ':name "package_vendor"' not in text
+
+
+def test_glob_exclusions_match_path_segments_and_directory_descendants(tmp_path):
+    sources = {
+        "client/generated/deep/code.lua": "client_generated",
+        "generated/root.lua": "root_generated",
+        "server/generated/code.lua": "server_generated",
+        "server/private.lua": "server_private",
+        "server/deep/private.lua": "deep_private",
+        "common/code1.lua": "code_one",
+        "common/code2.lua": "code_two",
+        "common/main.lua": "main",
+    }
+    for path, name in sources.items():
+        _write(tmp_path, path, f"function {name}() return 1 end\n")
+    assert run([
+        "--root", str(tmp_path), "--no-coverage",
+        "--exclude", "**/generated", "--exclude", "server/*.lua",
+        "--exclude", "common/code?.lua",
+    ]) == 0
+    text = (tmp_path / ".metrics/crap.edn").read_text(encoding="utf-8")
+    assert text.count(':name "deep_private"') == 1
+    assert text.count(':name "main"') == 1
+    assert text.count(":name ") == 2
+
+
+@pytest.mark.parametrize("selection", [[], ["client"], ["client/main.lua", "client/private.lua"], ["main"]])
+def test_exclusions_apply_to_default_explicit_and_filtered_selection(tmp_path, selection):
+    _write(tmp_path, "client/main.lua", "function main() return 1 end\n")
+    _write(tmp_path, "client/private.lua", "function private() return 1 end\n")
+    assert run([
+        "--root", str(tmp_path), "--no-coverage", "--exclude", "client/private.lua",
+        *selection,
+    ]) == 0
+    text = (tmp_path / ".metrics/crap.edn").read_text(encoding="utf-8")
+    assert ':name "main"' in text
+    assert ':name "private"' not in text
+
+
+def test_exclusions_apply_to_git_changed_selection(tmp_path):
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    _write(tmp_path, "client/main.lua", "function main() return 1 end\n")
+    _write(tmp_path, "server/_trigger/event.lua", "function trigger() return 1 end\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
+    assert run([
+        "--root", str(tmp_path), "--no-coverage", "--changed",
+        "--exclude", "server/_trigger",
+    ]) == 0
+    text = (tmp_path / ".metrics/crap.edn").read_text(encoding="utf-8")
+    assert ':name "main"' in text
+    assert ':name "trigger"' not in text
+
+
+def test_source_roots_keep_default_exclusions_and_allow_explicit_test_files(tmp_path):
+    _write(tmp_path, "client/main.lua", "function main() return 1 end\n")
+    for directory in ("spec", "vendor", "target", "lua_modules", ".luarocks"):
+        _write(tmp_path, f"{directory}/tool.lua", "function skipped() return 1 end\n")
+    assert run(["--root", str(tmp_path), "--no-coverage"]) == 0
+    text = (tmp_path / ".metrics/crap.edn").read_text(encoding="utf-8")
+    assert ':name "main"' in text
+    assert ':name "skipped"' not in text
+    assert run(["--root", str(tmp_path), "--no-coverage", "spec/tool.lua"]) == 0
+    text = (tmp_path / ".metrics/crap.edn").read_text(encoding="utf-8")
+    assert ':name "skipped"' in text
+
+
+def test_cli_accepts_native_paths_with_spaces_and_backslash_exclusions(tmp_path):
+    root = tmp_path / "business project"
+    _write(root, "server/main.lua", "function main() return 1 end\n")
+    _write(root, "server/_trigger/event.lua", "function trigger() return 1 end\n")
+    _write(root, "server/generated/nested/event.lua", "function generated() return 1 end\n")
+    result = subprocess.run([
+        sys.executable, "-m", "crapper", "--root", str(root), "--no-coverage",
+        "--source-root", str(root / "server"), "--source-root", str(root / "server" / "generated"),
+        "--exclude", "./server\\_trigger\\", "--exclude", "server\\generated\\**",
+    ], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    text = (root / ".metrics/crap.edn").read_text(encoding="utf-8")
+    assert text.count(':name "main"') == 1
+    assert text.count(":name ") == 1
+
+
+def test_exclude_requires_a_value_and_is_documented(capsys):
+    assert run(["--exclude"]) == 1
+    assert "--exclude requires a value" in capsys.readouterr().err
+    assert run(["--help"]) == 0
+    assert "--exclude" in capsys.readouterr().out
+
+
 def test_main_exits_with_the_status(monkeypatch):
     monkeypatch.setattr("crapper.cli.run", lambda _argv=None: 4)
     try:

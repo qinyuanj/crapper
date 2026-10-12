@@ -1,6 +1,8 @@
 """Find source files and decide which language each one is written in."""
 
 import os
+from fnmatch import fnmatchcase
+from functools import cache
 from pathlib import Path
 
 EXTENSIONS = {
@@ -96,6 +98,48 @@ def _walk(root: Path) -> list[Path]:
                 continue
             found.append(path)
     return found
+
+
+def _matches_exclusion(relative: str, pattern: str) -> bool:
+    parts = tuple(relative.split("/"))
+    segments = tuple(pattern.split("/"))
+
+    @cache
+    def matches(path_index: int, pattern_index: int) -> bool:
+        if pattern_index == len(segments):
+            return True  # A matching directory also excludes its descendants.
+        segment = segments[pattern_index]
+        if segment == "**":
+            return matches(path_index, pattern_index + 1) or (
+                path_index < len(parts) and matches(path_index + 1, pattern_index)
+            )
+        return (
+            path_index < len(parts)
+            and fnmatchcase(parts[path_index], segment)
+            and matches(path_index + 1, pattern_index + 1)
+        )
+
+    return matches(0, 0)
+
+
+def exclude_files(files: list[Path], project_root: Path, exclusions: list[str]) -> list[Path]:
+    """Apply project-relative exclusions after any source selection mode."""
+    if not exclusions:
+        return files
+    patterns = [
+        value.replace("\\", "/").removeprefix("./").rstrip("/")
+        for value in exclusions
+    ]
+    kept = []
+    for path in files:
+        try:
+            relative = path.resolve().relative_to(project_root.resolve()).as_posix()
+        except ValueError:
+            kept.append(path)
+            continue
+        if not any(_matches_exclusion(relative, pattern) for pattern in patterns):
+            kept.append(path)
+    return kept
 
 
 def iter_source_files(roots: list[Path]) -> list[Path]:
