@@ -14,6 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from crapper.coverage import CoverageBundle, load_bundle, read_fresh_lcov
 from crapper.discover import is_test_file, language_of
 
 _MAVEN = [
@@ -630,31 +631,58 @@ def _record_lua_lcov(module: Path, code: int, stats: Path, report: Path, lcov_cm
         raise CoverageError(f"LuaCov LCOV normalization failed in {module}: {exc}") from exc
 
 
-def _cover_lua(root: Path, files: list[Path]) -> None:
+def _cover_lua(root: Path, files: list[Path], reports: list[tuple[Path, Path]]) -> dict:
     lua = lua_interpreter()
     if lua is None:
         raise CoverageError("No Lua 5.4 interpreter (lua5.4 or lua) on PATH for Lua coverage.")
-    for module in lua_roots(root, files):
-        report = _coverage_report(root, module, "lua")
-        _prepare_report(report)
+    fresh = {}
+    for module, report in reports:
         stats = report.parent / "luacov.stats.out"
         config = report.parent / "luacov.cfg.lua"
-        config.write_text(lua_coverage_config(stats, report), encoding="utf-8")
+        try:
+            report.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text(lua_coverage_config(stats, report), encoding="utf-8")
+        except OSError as exc:
+            raise CoverageError(f"Cannot prepare LuaCov config: {exc}") from exc
         run_cmd, lcov_cmd = lua_coverage_commands(lua, config)
         _record_lua_lcov(module, run_shell(run_cmd, module), stats, report, lcov_cmd)
+        fresh.update(_fresh_lcov(report, module))
+    return fresh
 
 
-def run_coverage(root: Path, files: list[Path], command: str | None) -> None:
-    """Generate coverage reports for the languages present in `files`."""
+def _fresh_lcov(report: Path, source_base: Path) -> dict:
+    try:
+        return read_fresh_lcov(report, source_base)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise CoverageError(f"Required LCOV report invalid or unavailable: {report}: {exc}") from exc
+
+
+def _invalidate_artifacts(paths: list[Path]) -> None:
+    try:
+        for path in paths:
+            path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise CoverageError(f"Cannot invalidate managed coverage artifact: {exc}") from exc
+
+
+def run_coverage(root: Path, files: list[Path], command: str | None) -> CoverageBundle | None:
+    """Return validated custom/Lua coverage; other runners retain legacy loading."""
 
     root = root.resolve()
     if command:
+        report = root / "coverage" / "lcov.info"
+        _invalidate_artifacts([report, report.parent / "luacov.stats.out", root / "luacov.stats.out"])
         code = run_shell(command, root)
         if code != 0:
             raise CoverageError(f"Coverage command exited {code} in {root}.")
-        return
+        return CoverageBundle(lcov=_fresh_lcov(report, root))
 
     languages = _languages_in(files)
+    lua_reports = [(module, _coverage_report(root, module, "lua")) for module in lua_roots(root, files)]
+    if len({report for _, report in lua_reports}) != len(lua_reports):
+        raise CoverageError("Lua modules have colliding managed report paths.")
+    _invalidate_artifacts([path for _, report in lua_reports
+                           for path in (report, report.parent / "luacov.stats.out")])
     if "clojure" in languages:
         _cover_clojure(root)
     if "java" in languages:
@@ -668,4 +696,10 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> None:
     if "rust" in languages:
         _cover_rust(root, files)
     if "lua" in languages:
-        _cover_lua(root, files)
+        fresh = _cover_lua(root, files, lua_reports)
+        bundle = load_bundle(root) if languages - {"lua"} else CoverageBundle()
+        bundle.managed_lua = fresh
+        bundle.source_root = root
+        bundle.lcov.update(fresh)
+        return bundle
+    return None

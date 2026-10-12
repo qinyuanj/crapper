@@ -249,7 +249,8 @@ def test_coverage_commands_are_issued_per_language(tmp_path, monkeypatch):
     assert "vitest" in text
     assert "coverage run" in text
     assert "cargo llvm-cov" in text
-    run_coverage(tmp_path, files, "echo custom")
+    with pytest.raises(CoverageError, match="LCOV report"):
+        run_coverage(tmp_path, files, "echo custom")
     assert commands[-1] == "echo custom"
 
 
@@ -296,7 +297,8 @@ def test_argv_resolves_batch_launcher_on_windows(tmp_path, monkeypatch):
 
 
 def test_custom_shell_command_preserves_redirection(tmp_path):
-    run_coverage(tmp_path, [], 'echo shell-output > "custom report.txt"')
+    with pytest.raises(CoverageError, match="LCOV report"):
+        run_coverage(tmp_path, [], 'echo shell-output > "custom report.txt"')
     assert (tmp_path / "custom report.txt").read_text().strip() == "shell-output"
 
 
