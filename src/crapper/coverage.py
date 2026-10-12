@@ -116,6 +116,62 @@ def parse_lcov(text: str) -> dict[str, dict[int, tuple[int, int]]]:
     return out
 
 
+def read_fresh_lcov(report: Path, source_base: Path) -> dict[str, dict[int, tuple[int, int]]]:
+    """Validate required line coverage, resolving SF against the execution cwd.
+
+    This strict reader belongs to the managed lifecycle; parse_lcov stays permissive.
+    """
+    text = report.read_text(encoding="utf-8")
+    out: dict[str, dict[int, tuple[int, int]]] = {}
+    source = None
+    lines: dict[int, tuple[int, int]] = {}
+    counts: dict[str, int] = {}
+    ancillary = {"TN", "FN", "FNDA", "FNF", "FNH", "BRDA", "BRF", "BRH"}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        tag, _, value = line.partition(":")
+        if tag == "SF":
+            if source is not None or not value or "\x00" in value:
+                raise ValueError(f"invalid SF on line {number}")
+            path = Path(value.replace("\\", "/"))
+            if not path.is_absolute():
+                path = source_base / path
+            path = path.resolve()
+            if not path.is_file():
+                raise ValueError(f"unusable LCOV source: {value}")
+            # Opening verifies readability without imposing a source encoding.
+            with path.open("rb") as stream:
+                stream.read(1)
+            source = str(path)
+            if source in out:
+                raise ValueError(f"duplicate LCOV source: {value}")
+            lines, counts = {}, {}
+        elif line == "end_of_record":
+            if source is None or counts.get("LF") != len(lines) or counts.get("LH") != sum(v[0] for v in lines.values()):
+                raise ValueError(f"missing or inconsistent LF/LH on line {number}")
+            out[source] = lines
+            source = None
+        elif tag == "DA":
+            match = re.fullmatch(r"([1-9]\d*),(\d+)(?:,[0-9a-fA-F]{32})?", value)
+            if source is None or match is None:
+                raise ValueError(f"invalid DA on line {number}")
+            index, hits = map(int, match.groups()[:2])
+            if index in lines:
+                raise ValueError(f"duplicate DA on line {number}")
+            lines[index] = (int(hits > 0), 1)
+        elif tag in {"LF", "LH"}:
+            if source is None or tag in counts or re.fullmatch(r"\d+", value) is None:
+                raise ValueError(f"invalid {tag} on line {number}")
+            counts[tag] = int(value)
+        elif tag not in ancillary:
+            raise ValueError(f"invalid LCOV record on line {number}: {line}")
+    if source is not None or not out:
+        raise ValueError("LCOV requires at least one complete source record")
+    return out
+
+
 def parse_go_profile(text: str) -> dict[str, list[tuple[int, int, int, int]]]:
     """Map file → (start_line, end_line, statements, hits)."""
 
@@ -240,8 +296,13 @@ class CoverageBundle:
     go_profile: dict[str, list[tuple[int, int, int, int]]] | None = None
     jacoco: dict[str, list[JacocoMethod]] | None = None
     form_html: dict[str, dict[int, tuple[int, int]]] = field(default_factory=dict)
+    managed_lua: dict[str, dict[int, tuple[int, int]]] | None = None
+    source_root: Path | None = None
 
     def percent_for(self, function: Function) -> float | None:
+        if function.language == "lua" and self.managed_lua is not None:
+            path = str((self.source_root / function.path).resolve())
+            return percent_for_range(self.managed_lua.get(path), function.start_line, function.end_line)
         if function.language == "java":
             names = []
             if function.jacoco_class:

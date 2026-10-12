@@ -66,6 +66,21 @@ def test_missing_lua_stops_coverage(tmp_path, monkeypatch):
     assert not (tmp_path / "target").exists()
 
 
+def test_lua_invalidates_all_modules_before_missing_interpreter(tmp_path, monkeypatch):
+    files = [_write(tmp_path, "a.lua"), _write(tmp_path, "module/a.lua")]
+    _write(tmp_path, "module/.busted")
+    artifacts = ["target/coverage/lua/lcov.info", "target/coverage/lua/luacov.stats.out",
+                 "target/coverage/lua/module/lcov.info", "target/coverage/lua/module/luacov.stats.out"]
+    for path in artifacts:
+        _write(tmp_path, path, "old")
+    keep = _write(tmp_path, "target/coverage/lua/caller.txt", "keep")
+    monkeypatch.setattr("crapper.runners.lua_interpreter", lambda: None)
+    with pytest.raises(CoverageError):
+        run_coverage(tmp_path, files, None)
+    assert all(not (tmp_path / path).exists() for path in artifacts)
+    assert keep.read_text() == "keep"
+
+
 def test_lua_coverage_config_and_commands(tmp_path):
     stats = tmp_path / "out" / "luacov.stats.out"
     report = tmp_path / "out" / "lcov.info"
@@ -164,8 +179,10 @@ def test_fixture_project_end_to_end(tmp_path, monkeypatch, runtime_with_spaces):
         _write(project, ".busted", "return {default = {lpath = 'src/?.lua;src/?/init.lua', lua = 'missing-lua'}}")
     monkeypatch.chdir(project)
     files = iter_source_files([project])
-    run_coverage(project, files, None)
-    entries = analyze_files(files, project, load_bundle(project))
+    stale = _write(project, "coverage/stale/lcov.info", "SF:src/calc/util.lua\nDA:2,1\nend_of_record\n")
+    bundle = run_coverage(project, files, None)
+    assert stale.is_file()
+    entries = analyze_files(files, project, bundle)
     assert [(e.namespace, e.name, e.complexity, e.coverage) for e in entries] == [
         ("calc.util", "M.untested", 2, 0.0),
         ("calc.util", "M.clamp", 4, 100.0),

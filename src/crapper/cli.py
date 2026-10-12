@@ -265,11 +265,12 @@ def run(argv: list[str] | None = None) -> int:
     if not options.no_coverage:
         if not options.use_existing_coverage:
             try:
-                run_coverage(root, files, options.coverage_command)
+                bundle = run_coverage(root, files, options.coverage_command)
             except CoverageError as exc:
                 print(f"Coverage failed: {exc}", file=sys.stderr)
                 return 1
-        bundle = load_bundle(root)
+        if bundle is None:
+            bundle = load_bundle(root)
 
     entries = analyze_files(files, root, bundle)
     metrics = write_metrics(entries, root)
