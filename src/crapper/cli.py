@@ -9,7 +9,7 @@ from pathlib import Path
 
 from crapper.analyze import analyze_files
 from crapper.coverage import load_bundle
-from crapper.discover import is_test_file, iter_source_files, language_of
+from crapper.discover import exclude_files, is_test_file, iter_source_files, language_of
 from crapper.metrics import write_metrics
 from crapper.report import format_report
 from crapper.runners import run_coverage
@@ -30,6 +30,11 @@ Options:
                                 Default: the current directory.
   -s, --source-root <path>      Walk this tree instead of the project root.
                                 May be repeated.
+  --exclude <path-or-glob>      Exclude a project-relative file or directory.
+                                May be repeated; applies to every selection mode.
+                                Both separators work. * and ? match within a path
+                                segment; ** matches zero or more whole segments.
+                                Matching directories exclude their descendants.
   --changed                     Analyze added and modified source files from
                                 git status.
   --no-coverage                 Score complexity only. Coverage and CRAP are N/A.
@@ -75,6 +80,7 @@ class Options:
     exit_code: int = 0
     project_root: Path = field(default_factory=lambda: Path("."))
     source_roots: list[str] = field(default_factory=list)
+    exclusions: list[str] = field(default_factory=list)
     positionals: list[str] = field(default_factory=list)
     no_coverage: bool = False
     use_existing_coverage: bool = False
@@ -100,6 +106,10 @@ def parse_args(argv: list[str] | None = None) -> Options:
             arg = args[index]
             if arg in {"-s", "--source-root"}:
                 options.source_roots.append(_take(args, index, arg))
+                index += 2
+                continue
+            if arg == "--exclude":
+                options.exclusions.append(_take(args, index, arg))
                 index += 2
                 continue
             if arg == "--root":
@@ -220,6 +230,7 @@ def select_files(options: Options) -> list[Path]:
     root = options.project_root.resolve()
     existing, filters = _positionals(root, options.positionals)
     files = _apply_filters(_selected(options, root, existing), filters)
+    files = exclude_files(files, root, options.exclusions)
     return sorted({path.resolve() for path in files}, key=lambda path: path.as_posix())
 
 

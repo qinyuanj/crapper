@@ -30,6 +30,53 @@ The first run creates `.venv` and installs the tool. From a project root it walk
 ./crapper --threshold 30                 # exit 2 when the worst score is higher
 ```
 
+## Source roots and exclusions
+
+Repeat `--source-root` to analyze several trees in one snapshot. Relative roots
+are resolved from `--root` (the current directory by default); absolute roots
+also work. Overlapping roots produce each source file once. For a Lua business
+tree with client, common, and server code:
+
+```bash
+crapper --root /path/to/project --no-coverage \
+  --source-root client --source-root common --source-root server \
+  --exclude packages --exclude server/_trigger
+```
+
+In native Windows PowerShell, paths containing spaces are quoted:
+
+```powershell
+crapper --root "C:\work\business project" --no-coverage `
+  --source-root client --source-root common --source-root server `
+  --exclude packages --exclude 'server\_trigger'
+```
+
+`--exclude` may be repeated. Each value is anchored at the project root, even
+when selecting another source root, an explicit file or directory, a path
+filter, or `--changed`. An exact file excludes that file; an exact directory
+excludes all descendants. `server/_trigger` therefore preserves
+`client/_trigger` and `server/_trigger_extra`. Exclusions also apply to explicitly
+named test files. Existing default skips, including `lua_modules` and
+`.luarocks`, still apply during discovery; naming an individual test file
+explicitly remains supported.
+
+Exclusion patterns use `/` or `\` as separators on every platform. An optional
+leading `./` and trailing separator are ignored. Matching is case-sensitive.
+`*` matches zero or more characters within one segment, `?` matches one, and
+`[abc]`, `[a-z]`, and `[!abc]` match character sets, ranges, and their complements.
+A whole `**` segment matches zero or more path segments. A matching directory
+excludes its descendants, including when matched by a glob. For example,
+`server/*.lua` excludes immediate Lua files, `**/generated` excludes generated
+directories at any depth, and `server/**/private?.lua` matches across nested
+directories. Quote globs so the shell passes them unchanged. Use project-relative
+paths without `..`; sources explicitly selected outside the project root are
+not matched by project-relative exclusions.
+
+These CLI scenarios were tested natively on Windows, including backslash
+exclusions, absolute source roots, and project paths containing spaces. macOS
+uses the same project-relative matching rules with `/` paths and quoted globs;
+macOS execution has not been validated.
+
 ## Snapshot
 
 `.metrics/crap.edn` has the same shape crap4clj writes:
