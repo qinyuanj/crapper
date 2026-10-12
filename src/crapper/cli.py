@@ -286,10 +286,6 @@ def run(argv: list[str] | None = None) -> int:
     if not files and not options.full_tree:
         print("No source files to analyze.")
         return 0
-    if not files:
-        print("Publishing empty business tree; no coverage ran." if not options.coverage_command
-              else "Publishing empty business tree after custom coverage validation.",
-              file=sys.stderr)
 
     bundle = None
     if not options.no_coverage and (files or options.coverage_command):
@@ -302,6 +298,10 @@ def run(argv: list[str] | None = None) -> int:
         if bundle is None:
             bundle = load_bundle(root)
 
+    if not files:
+        print("Publishing empty business tree; no coverage ran." if not options.coverage_command
+              else "Publishing empty business tree after custom coverage validation.",
+              file=sys.stderr)
     try:
         entries = analyze_files(files, root, bundle)
         report = format_report(entries)

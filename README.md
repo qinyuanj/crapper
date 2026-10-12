@@ -106,7 +106,11 @@ the final source atomically replaces the previous snapshot with `{:entries []}`.
 When the tree is empty and no custom command was requested, the CLI explains
 that no coverage ran; there are no modules from which to infer a built-in run.
 An explicit custom coverage command still passes through the coverage failure
-gate before an empty snapshot can be published.
+gate before an empty snapshot can be published: it must produce a fresh valid
+`coverage/lcov.info` with at least one complete record for an existing source.
+A zero-executable-line record (`LF:0`, `LH:0`) is valid, including a source outside
+the selected roots. Empty built-in runs do not infer modules or clear artifacts
+belonging to previous modules; those artifacts are not read into the empty snapshot.
 
 The CLI prepares the text report before publishing the snapshot. The snapshot
 writer renders and encodes all entries, stages a complete file beside the
@@ -116,7 +120,8 @@ snapshot. Staging artifacts are cleaned up; a failed publication creates no
 incomplete destination. Threshold checks occur after valid publication and
 retain exit code 2.
 
-Complete-tree selection, deletion, empty refreshes, and filesystem failure
+Complete-tree selection, fresh standard Lua reporter coverage across client,
+common, and server roots, deletion, empty refreshes, and filesystem failure
 scenarios were tested through the native Windows CLI with project paths
 containing spaces, including a destination held open without delete sharing.
 On macOS this assumes the destination filesystem supports atomic replacement
