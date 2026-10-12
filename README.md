@@ -19,7 +19,7 @@ CRAP = CC² × (1 − coverage)³ + CC
 The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
 
 - a table on stdout, worst score first
-- `.metrics/crap.edn`, replaced on every successful analysis
+- `.metrics/crap.edn`, atomically replaced after successful analysis; legacy selections with no sources leave it unchanged
 
 ```bash
 ./crapper --no-coverage                  # complexity only; coverage is N/A
@@ -75,6 +75,52 @@ not matched by project-relative exclusions.
 These CLI scenarios were tested natively on Windows, including backslash
 exclusions, absolute source roots, and project paths containing spaces. macOS
 uses the same project-relative matching rules with `/` paths and quoted globs;
+macOS execution has not been validated.
+
+## Complete business-tree refresh
+
+Use `--full-tree` to publish every source under the configured roots, with the
+same exclusions and default skips described above. Without `--source-root`, the
+project root is the business tree. Each declared root must exist and resolve
+inside the project root; an existing empty directory is valid. This avoids
+publishing an empty snapshot because a root was mistyped or bypassing
+project-relative exclusions with an outside root.
+
+```bash
+crapper --root /path/to/project --full-tree \
+  --source-root client --source-root common --source-root server \
+  --exclude packages --exclude server/_trigger
+
+# Complete complexity-only snapshot; coverage and CRAP remain N/A.
+crapper --root /path/to/project --full-tree --no-coverage \
+  --source-root client --source-root common --source-root server
+```
+
+`--full-tree` rejects `--changed`, every positional path or filter, and
+`--use-existing-coverage`. These options retain their existing selection behavior
+when `--full-tree` is absent. `--no-coverage` explicitly selects a complete
+complexity snapshot; it does not claim a fresh covered quality refresh.
+
+Deleting sources removes their entries on the next complete refresh. Deleting
+the final source atomically replaces the previous snapshot with `{:entries []}`.
+When the tree is empty and no custom command was requested, the CLI explains
+that no coverage ran; there are no modules from which to infer a built-in run.
+An explicit custom coverage command still passes through the coverage failure
+gate before an empty snapshot can be published.
+
+The CLI prepares the text report before publishing the snapshot. The snapshot
+writer renders and encodes all entries, stages a complete file beside the
+destination, then atomically replaces it. Source reading, report rendering,
+staging, or replacement errors return nonzero and preserve the previous
+snapshot. Staging artifacts are cleaned up; a failed publication creates no
+incomplete destination. Threshold checks occur after valid publication and
+retain exit code 2.
+
+Complete-tree selection, deletion, empty refreshes, and filesystem failure
+scenarios were tested through the native Windows CLI with project paths
+containing spaces, including a destination held open without delete sharing.
+On macOS this assumes the destination filesystem supports atomic replacement
+of a sibling file and the process can create and replace files in `.metrics`;
 macOS execution has not been validated.
 
 ## Snapshot

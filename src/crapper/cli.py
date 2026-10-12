@@ -35,6 +35,9 @@ Options:
                                 Both separators work. * and ? match within a path
                                 segment; ** matches zero or more whole segments.
                                 Matching directories exclude their descendants.
+  --full-tree                   Replace the complete configured business tree.
+                                Rejects --changed, positionals and existing coverage.
+                                --no-coverage publishes complexity only.
   --changed                     Analyze added and modified source files from
                                 git status.
   --no-coverage                 Score complexity only. Coverage and CRAP are N/A.
@@ -87,6 +90,7 @@ class Options:
     coverage_command: str | None = None
     threshold: float | None = None
     changed: bool = False
+    full_tree: bool = False
 
 
 def _take(args: list[str], index: int, option: str) -> str:
@@ -136,6 +140,10 @@ def parse_args(argv: list[str] | None = None) -> Options:
                 options.use_existing_coverage = True
                 index += 1
                 continue
+            if arg == "--full-tree":
+                options.full_tree = True
+                index += 1
+                continue
             if arg == "--changed":
                 options.changed = True
                 index += 1
@@ -150,6 +158,13 @@ def parse_args(argv: list[str] | None = None) -> Options:
         return Options(
             action="help",
             message=f"--no-coverage cannot be combined with --coverage-command\n\n{HELP}",
+            exit_code=1,
+        )
+    if options.full_tree and (options.changed or options.positionals or options.use_existing_coverage):
+        return Options(
+            action="help",
+            message="--full-tree cannot be combined with --changed, positional paths/filters, "
+                    f"or --use-existing-coverage\n\n{HELP}",
             exit_code=1,
         )
     return options
@@ -228,6 +243,13 @@ def _apply_filters(files: list[Path], filters: list[str]) -> list[Path]:
 
 def select_files(options: Options) -> list[Path]:
     root = options.project_root.resolve()
+    if options.full_tree:
+        for value in options.source_roots or [str(root)]:
+            source_root = (root / value).resolve()
+            if not source_root.exists():
+                raise ValueError(f"Source root does not exist: {source_root}")
+            if not source_root.is_relative_to(root):
+                raise ValueError(f"Source root must be inside project root: {source_root}")
     existing, filters = _positionals(root, options.positionals)
     files = _apply_filters(_selected(options, root, existing), filters)
     files = exclude_files(files, root, options.exclusions)
@@ -256,13 +278,21 @@ def run(argv: list[str] | None = None) -> int:
     warning = platform_warning(sys.platform, root)
     if warning:
         print(warning, file=sys.stderr)
-    files = select_files(options)
-    if not files:
+    try:
+        files = select_files(options)
+    except (OSError, ValueError) as exc:
+        print(f"Source selection failed: {exc}", file=sys.stderr)
+        return 1
+    if not files and not options.full_tree:
         print("No source files to analyze.")
         return 0
+    if not files:
+        print("Publishing empty business tree; no coverage ran." if not options.coverage_command
+              else "Publishing empty business tree after custom coverage validation.",
+              file=sys.stderr)
 
     bundle = None
-    if not options.no_coverage:
+    if not options.no_coverage and (files or options.coverage_command):
         if not options.use_existing_coverage:
             try:
                 run_coverage(root, files, options.coverage_command)
@@ -271,9 +301,18 @@ def run(argv: list[str] | None = None) -> int:
                 return 1
         bundle = load_bundle(root)
 
-    entries = analyze_files(files, root, bundle)
-    metrics = write_metrics(entries, root)
-    print(format_report(entries), end="", flush=True)
+    try:
+        entries = analyze_files(files, root, bundle)
+        report = format_report(entries)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"Report rendering failed: {exc}", file=sys.stderr)
+        return 1
+    try:
+        metrics = write_metrics(entries, root)
+    except (OSError, UnicodeError) as exc:
+        print(f"Snapshot publication failed: {exc}", file=sys.stderr)
+        return 1
+    print(report, end="", flush=True)
     print(f"Wrote {metrics}", file=sys.stderr)
     if options.threshold is not None:
         scored = [entry.crap for entry in entries if entry.crap is not None]
