@@ -283,7 +283,7 @@ def run(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"Source selection failed: {exc}", file=sys.stderr)
         return 1
-    if not files and not options.full_tree:
+    if not files and not options.full_tree and not options.coverage_command:
         print("No source files to analyze.")
         return 0
 
@@ -297,6 +297,10 @@ def run(argv: list[str] | None = None) -> int:
                 return 1
         if bundle is None:
             bundle = load_bundle(root)
+
+    if not files and not options.full_tree:
+        print("No source files to analyze; custom coverage validated.")
+        return 0
 
     if not files:
         print("Publishing empty business tree; no coverage ran." if not options.coverage_command

@@ -675,7 +675,7 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> Coverage
         code = run_shell(command, root)
         if code != 0:
             raise CoverageError(f"Coverage command exited {code} in {root}.")
-        return CoverageBundle(lcov=_fresh_lcov(report, root))
+        return CoverageBundle(fresh_lcov=_fresh_lcov(report, root), source_root=root)
 
     languages = _languages_in(files)
     lua_reports = [(module, _coverage_report(root, module, "lua")) for module in lua_roots(root, files)]

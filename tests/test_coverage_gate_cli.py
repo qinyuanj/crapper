@@ -253,6 +253,117 @@ def test_all_lua_module_artifacts_are_invalid_before_first_busted_run(tmp_path):
     assert not (project / ".metrics/crap.edn").exists()
 
 
+@pytest.mark.parametrize("extension, source", [
+    ("lua", "local M = {}; function M.value() return 42 end; return M\n"),
+    ("py", "def value():\n    return 42\n"),
+    ("ts", "export function value() { return 42; }\n"),
+    ("rs", "pub fn value() -> i32 { 42 }\n"),
+    ("clj", "(ns calc)\n(defn value [] 42)\n"),
+])
+def test_custom_report_does_not_assign_sibling_suffix_coverage(tmp_path, extension, source):
+    project = tmp_path / "exact matching project with spaces"
+    relative = f"src/calc.{extension}"
+    write(project, relative, source)
+    write(project, f"other/{relative}", source)
+    record = f"SF:other/{relative}\nDA:1,1\nDA:2,1\nLF:2\nLH:2\nend_of_record\n"
+    script = write(tmp_path, "exact writer.py", "from pathlib import Path\n"
+                   "p = Path('coverage/lcov.info'); p.parent.mkdir(exist_ok=True)\n"
+                   f"p.write_text({record!r})\n")
+    result = cli(project, "--source-root", "src", "--coverage-command",
+                 shell_command([sys.executable, str(script)]))
+    assert result.returncode == 0, result.stderr
+    snapshot = (project / ".metrics/crap.edn").read_text()
+    assert ":coverage nil" in snapshot
+    assert ":coverage 100.0" not in snapshot
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_custom_report_native_case_equivalence(tmp_path, duplicate):
+    project = tmp_path / "case matching project with spaces"
+    source = write(project, "src/calc.lua", "local M = {}; function M.value() return 42 end; return M\n")
+    variant = str(source).upper()
+    record = f"SF:{variant}\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
+    if duplicate:
+        record += "SF:src/calc.lua\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
+    previous = write(project, ".metrics/crap.edn", "previous snapshot\n").read_bytes()
+    script = write(tmp_path, "case writer.py", "from pathlib import Path\n"
+                   "p = Path('coverage/lcov.info'); p.parent.mkdir(exist_ok=True)\n"
+                   f"p.write_text({record!r})\n")
+    result = cli(project, "--coverage-command", shell_command([sys.executable, str(script)]))
+    if os.name == "nt" and not duplicate:
+        assert result.returncode == 0, result.stderr
+        assert ":coverage 100.0" in (project / ".metrics/crap.edn").read_text()
+    else:
+        assert result.returncode == 1, result.stderr
+        assert (project / ".metrics/crap.edn").read_bytes() == previous
+        if os.name == "nt":
+            assert "duplicate LCOV source" in result.stderr
+
+
+@pytest.mark.skipif(lua_interpreter() is None, reason="Lua 5.4 is not installed")
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_builtin_lua_report_native_case_equivalence(tmp_path, duplicate):
+    project = tmp_path / "builtin case project with spaces"
+    write(project, ".busted", "return {default = {lpath = 'src/?.lua'}}")
+    write(project, "src/calc.lua", "local M = {}; function M.value() return 42 end; return M\n")
+    write(project, "spec/calc_spec.lua", "describe('calc', function() it('passes', function() "
+          "assert.equals(42, require('calc').value()) end) end)\n")
+    record = "SF:SRC/CALC.LUA\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
+    if duplicate:
+        record += "SF:src/calc.lua\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
+    literal = "[=[" + record + "]=]"
+    # Exercise the real built-in lifecycle with a reporter emitting variant SFs.
+    write(project, "luacov/reporter/lcov.lua",
+          "return {report = function() "
+          "local config = require('luacov.runner').configuration; "
+          "local f = assert(io.open(config.reportfile, 'w')); "
+          f"f:write({literal}); f:close() end}}\n")
+    previous = write(project, ".metrics/crap.edn", "previous snapshot\n").read_bytes()
+    result = cli(project)
+    if os.name == "nt" and not duplicate:
+        assert result.returncode == 0, result.stderr
+        assert ":coverage 100.0" in (project / ".metrics/crap.edn").read_text()
+    else:
+        assert result.returncode == 1, result.stderr
+        assert (project / ".metrics/crap.edn").read_bytes() == previous
+        if os.name == "nt":
+            assert "duplicate LCOV source" in result.stderr
+
+
+@pytest.mark.parametrize("outcome", ["failed", "missing", "malformed", "valid"])
+def test_empty_legacy_selection_runs_and_validates_explicit_custom_command(tmp_path, outcome):
+    project = tmp_path / "empty selection project with spaces"
+    # A real readable SF exists, but is outside the explicitly selected empty tree.
+    write(project, "external/calc.lua", "return 42\n")
+    (project / "business").mkdir()
+    previous = write(project, ".metrics/crap.edn", "previous snapshot\n").read_bytes()
+    managed = ["coverage/lcov.info", "coverage/luacov.stats.out", "luacov.stats.out"]
+    for path in managed:
+        write(project, path, "stale")
+    script = write(tmp_path, "empty command.py", "from pathlib import Path\n"
+                   f"assert all(not Path(p).exists() for p in {managed!r})\n"
+                   "Path('command ran').write_text('yes')\n"
+                   + {"failed": "raise SystemExit(9)\n", "missing": "",
+                      "malformed": "Path('coverage/lcov.info').write_text('invalid')\n",
+                      "valid": "Path('coverage/lcov.info').write_text('SF:external/calc.lua\\nLF:0\\nLH:0\\nend_of_record\\n')\n"}[outcome])
+    result = cli(project, "--source-root", "business", "--coverage-command",
+                 shell_command([sys.executable, str(script)]))
+    assert result.returncode == (0 if outcome == "valid" else 1), result.stderr
+    assert (project / "command ran").read_text() == "yes"
+    assert (project / ".metrics/crap.edn").read_bytes() == previous
+    assert "Wrote" not in result.stderr
+
+
+def test_empty_legacy_selection_without_command_preserves_artifacts(tmp_path):
+    project = tmp_path / "empty project with spaces"
+    snapshot = write(project, ".metrics/crap.edn", "previous snapshot\n")
+    report = write(project, "coverage/lcov.info", "legacy report")
+    result = cli(project)
+    assert result.returncode == 0, result.stderr
+    assert snapshot.read_text() == "previous snapshot\n"
+    assert report.read_text() == "legacy report"
+
+
 def test_metric_threshold_exit_publishes_valid_snapshot(tmp_path):
     project = tmp_path / "project with spaces"
     write(project, "src/calc.lua", "local M = {}; function M.value() return 42 end; return M\n")

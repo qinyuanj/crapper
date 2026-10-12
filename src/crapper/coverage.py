@@ -7,6 +7,7 @@ line hits. A file with no coverage data scores N/A rather than 0%.
 
 from __future__ import annotations
 
+import os
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -123,6 +124,7 @@ def read_fresh_lcov(report: Path, source_base: Path) -> dict[str, dict[int, tupl
     """
     text = report.read_text(encoding="utf-8")
     out: dict[str, dict[int, tuple[int, int]]] = {}
+    sources: set[str] = set()
     source = None
     lines: dict[int, tuple[int, int]] = {}
     counts: dict[str, int] = {}
@@ -145,8 +147,10 @@ def read_fresh_lcov(report: Path, source_base: Path) -> dict[str, dict[int, tupl
             with path.open("rb") as stream:
                 stream.read(1)
             source = str(path)
-            if source in out:
+            identity = os.path.normcase(source)
+            if identity in sources:
                 raise ValueError(f"duplicate LCOV source: {value}")
+            sources.add(identity)
             lines, counts = {}, {}
         elif line == "end_of_record":
             if source is None or counts.get("LF") != len(lines) or counts.get("LH") != sum(v[0] for v in lines.values()):
@@ -297,12 +301,15 @@ class CoverageBundle:
     jacoco: dict[str, list[JacocoMethod]] | None = None
     form_html: dict[str, dict[int, tuple[int, int]]] = field(default_factory=dict)
     managed_lua: dict[str, dict[int, tuple[int, int]]] | None = None
+    fresh_lcov: dict[str, dict[int, tuple[int, int]]] | None = None
     source_root: Path | None = None
 
     def percent_for(self, function: Function) -> float | None:
         if function.language == "lua" and self.managed_lua is not None:
-            path = str((self.source_root / function.path).resolve())
-            return percent_for_range(self.managed_lua.get(path), function.start_line, function.end_line)
+            path = os.path.normcase(str((self.source_root / function.path).resolve()))
+            lines = next((lines for key, lines in self.managed_lua.items()
+                          if os.path.normcase(key) == path), None)
+            return percent_for_range(lines, function.start_line, function.end_line)
         if function.language == "java":
             names = []
             if function.jacoco_class:
@@ -327,6 +334,12 @@ class CoverageBundle:
         return _lookup(self.form_html, path)
 
     def _lcov_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
+        if self.fresh_lcov is not None:
+            source = (self.source_root / path).resolve()
+            # Fresh sources use project-anchored exact identity; legacy imports
+            # retain their historical suffix matching.
+            return next((lines for key, lines in self.fresh_lcov.items()
+                         if os.path.normcase(key) == os.path.normcase(str(source))), None)
         return _lookup(self.lcov, path)
 
 
