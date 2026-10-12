@@ -226,7 +226,7 @@ WSL2 with Ubuntu is also an installation option:
 
    ```bash
    cd ~
-   git clone -b lua https://github.com/TLOBillyQ/crapper.git
+   git clone -b lua https://github.com/qinyuanj/crapper.git
    ```
 
 3. Run `crapper/scripts/setup-ubuntu.sh`. It installs Python, Lua 5.4,

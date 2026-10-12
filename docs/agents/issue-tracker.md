@@ -11,7 +11,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-The tracker is `TLOBillyQ/crapper`. Add `--repo TLOBillyQ/crapper` to every `gh issue` and `gh pr` command above and below; use `repos/TLOBillyQ/crapper/...` for API endpoints. This clone also has an upstream remote, so automatic repository inference can select another tracker.
+The tracker is `qinyuanj/crapper`. Add `--repo qinyuanj/crapper` to every `gh issue` and `gh pr` command above and below; use `repos/qinyuanj/crapper/...` for API endpoints. This clone also has an upstream remote, so automatic repository inference can select another tracker.
 
 ## Implementation completion
 
