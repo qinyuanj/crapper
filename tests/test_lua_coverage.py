@@ -87,12 +87,68 @@ def test_lua_coverage_config_and_commands(tmp_path):
     config = lua_coverage_config(stats, report)
     assert f"statsfile = [==[{stats}]==]" in config
     assert f"reportfile = [==[{report}]==]" in config
-    assert "includeuntestedfiles = true" in config
+    assert "includeuntestedfiles = {}" in config
     assert "[==[_spec$]==]" in config
     run, lcov = lua_coverage_commands("/opt/lua 5.4/bin/lua", tmp_path / "cfg.lua")
     assert run[0] == lcov[0] == "/opt/lua 5.4/bin/lua"
     assert run[-4:] == ["busted", "--ignore-lua", "-c", f"--coverage-config-file={tmp_path / 'cfg.lua'}"]
     assert lcov[-2:] == ["luacov", str(tmp_path / "cfg.lua")]
+
+
+def test_selected_uncovered_files_are_relative_sorted_and_safe(tmp_path):
+    files = [tmp_path / "src" / name for name in ("z 'quoted'.lua", "a]==] ü.lua")]
+    config = lua_coverage_config(tmp_path / "stats", tmp_path / "report", files + files, tmp_path)
+    path = _write(tmp_path, "config.lua", config)
+    lua = lua_interpreter()
+    if lua is None:
+        pytest.skip("Lua 5.4 unavailable")
+    assert run_shell([lua, "-e", "local c = dofile(arg[0]); assert(#c.includeuntestedfiles == 2); "
+                      "assert(c.includeuntestedfiles[1] == \"src/a]==] ü.lua\"); "
+                      "assert(c.includeuntestedfiles[2] == \"src/z 'quoted'.lua\")",
+                      "--", str(path)], tmp_path) == 0
+
+
+@pytest.mark.skipif(not all(shutil.which(tool) for tool in ("busted", "luacov")), reason="Lua tools unavailable")
+def test_selected_unrequired_files_and_unrelated_broken_tree(tmp_path, monkeypatch):
+    from crapper import runners
+    commands = runners.lua_coverage_commands
+    def without_directory_walk(lua, config):
+        run, report = commands(lua, config)
+        report[2] = report[2].replace("local r = require('luacov.runner');",
+                                      "require('lfs').dir = function() error('unexpected directory walk') end; "
+                                      "local r = require('luacov.runner');")
+        return run, report
+    monkeypatch.setattr(runners, "lua_coverage_commands", without_directory_walk)
+    _write(tmp_path, ".busted", "return {default = {lpath = 'src/?.lua'}}")
+    used = _write(tmp_path, "src/used.lua", "return {value = 42}\n")
+    unused = _write(tmp_path, "src/unused ' ü]==].lua", "local M = {}\nfunction M.zero()\n return 99\nend\nreturn M\n")
+    _write(tmp_path, "spec/used_spec.lua", "it('works', function() assert.equals(42, require('used').value) end)\n")
+    _write(tmp_path, ".claude/worktrees/broken/bad.lua", "this is not valid Lua !!!\n")
+    bundle = run_coverage(tmp_path, [used, unused, unused], None)
+    records = bundle.managed_lua
+    zero = next(lines for name, lines in records.items() if Path(name).resolve() == unused.resolve())
+    assert zero and all(hits == 0 for hits, _ in zero.values())
+    assert not any("broken" in name for name in records)
+
+
+def test_lua_modules_only_receive_their_own_selected_files(tmp_path, monkeypatch):
+    from crapper import runners
+    root_file = _write(tmp_path, "src/a.lua")
+    module_file = _write(tmp_path, "nested/src/b.lua")
+    _write(tmp_path, "nested/.busted", "return {}")
+    seen = {}
+    original = lua_coverage_config
+    def capture(stats, report, source_files=(), directory=None):
+        seen[directory] = list(source_files)
+        return original(stats, report, source_files, directory)
+    monkeypatch.setattr(runners, "lua_coverage_config", capture)
+    monkeypatch.setattr(runners, "lua_interpreter", lambda: "lua")
+    monkeypatch.setattr(runners, "run_shell", lambda *args: 0)
+    monkeypatch.setattr(runners, "_record_lua_lcov", lambda *args: None)
+    monkeypatch.setattr(runners, "_fresh_lcov", lambda *args: {})
+    run_coverage(tmp_path, [root_file, module_file, root_file], None)
+    assert set(seen[tmp_path.resolve()]) == {root_file}
+    assert set(seen[(tmp_path / "nested").resolve()]) == {module_file}
 
 
 def test_relative_lcov_sources_are_anchored_to_the_lua_root(tmp_path):
@@ -126,7 +182,7 @@ def test_lua_executable_reads_config_paths_with_spaces(tmp_path):
     config = _write(tmp_path, "config directory/luacov.cfg.lua",
                     lua_coverage_config(tmp_path / "stats file", tmp_path / "report file"))
     assert run_shell([str(executable), "-e",
-                      "local c = dofile(arg[0]); assert(c.includeuntestedfiles == true)",
+                      "local c = dofile(arg[0]); assert(type(c.includeuntestedfiles) == 'table')",
                       "--", str(config)], tmp_path) == 0
 
 

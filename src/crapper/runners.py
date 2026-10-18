@@ -551,16 +551,25 @@ def lua_interpreter() -> str | None:
 
 
 def _lua_string(text: str) -> str:
-    return "[==[" + text + "]==]"
+    equals = "=="
+    while "]" + equals + "]" in text:
+        equals += "="
+    return "[" + equals + "[" + text + "]" + equals + "]"
 
 
-def lua_coverage_config(stats: Path, report: Path) -> str:
+def lua_coverage_config(
+    stats: Path, report: Path, source_files: list[Path] | None = None, directory: Path | None = None,
+) -> str:
+    directory = (directory or Path.cwd()).resolve()
+    selected = sorted({os.path.relpath(Path(path).resolve(), directory).replace("\\", "/")
+                       for path in (source_files or [])})
+    untested = ", ".join(_lua_string(path) for path in selected)
     exclude = ", ".join(_lua_string(pattern) for pattern in _LUA_EXCLUDE)
     return (
         "return {\n"
         f"  statsfile = {_lua_string(str(stats))},\n"
         f"  reportfile = {_lua_string(str(report))},\n"
-        "  includeuntestedfiles = true,\n"
+        f"  includeuntestedfiles = {{{untested}}},\n"
         f"  exclude = {{{exclude}}},\n"
         "}\n"
     )
@@ -599,6 +608,11 @@ def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]
            "--", "busted", "--ignore-lua", "-c", f"--coverage-config-file={config}"]
     lcov = [lua, "-e", loader +
             "local r = require('luacov.runner'); local c = r.load_config(arg[1]); "
+            # LuaCov retains slash variants as different keys, including zero-hit
+            # selected files. Normalize before the reporter merges those keys.
+            "if package.config:sub(1, 1) == string.char(92) then "
+            "local real_name = r.real_name; "
+            "r.real_name = function(name) return (real_name(name):gsub(string.char(92), '/')) end end; "
             "c.reporter = 'lcov'; r.run_report(c); os.exit(0)",
             "--", "luacov", str(config)]
     return run, lcov
@@ -641,7 +655,9 @@ def _cover_lua(root: Path, files: list[Path], reports: list[tuple[Path, Path]]) 
         config = report.parent / "luacov.cfg.lua"
         try:
             report.parent.mkdir(parents=True, exist_ok=True)
-            config.write_text(lua_coverage_config(stats, report), encoding="utf-8")
+            selected = [path for path in files if Path(path).suffix == ".lua"
+                        and lua_roots(root, [path]) == [module]]
+            config.write_text(lua_coverage_config(stats, report, selected, module), encoding="utf-8")
         except OSError as exc:
             raise CoverageError(f"Cannot prepare LuaCov config: {exc}") from exc
         run_cmd, lcov_cmd = lua_coverage_commands(lua, config)
