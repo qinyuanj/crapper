@@ -12,6 +12,7 @@ from crapper.runners import (
     _clean_clojure,
     absolute_lcov_sources,
     lua_coverage_commands,
+    lua_cluacov_version,
     lua_coverage_config,
     lua_interpreter,
     lua_roots,
@@ -81,6 +82,30 @@ def test_lua_invalidates_all_modules_before_missing_interpreter(tmp_path, monkey
     assert keep.read_text() == "keep"
 
 
+@pytest.mark.parametrize("version", ["", "0.1.4"])
+def test_missing_or_other_cluacov_stops_coverage_before_tests(tmp_path, monkeypatch, version):
+    from crapper import runners
+    ran = []
+    monkeypatch.setattr(runners, "lua_interpreter", lambda: "/opt/lua5.4")
+    monkeypatch.setattr(runners, "lua_cluacov_version", lambda lua: version)
+    monkeypatch.setattr(runners, "run_shell", lambda *args: ran.append(args) or 0)
+    with pytest.raises(CoverageError, match="cluacov 1.0.0"):
+        run_coverage(tmp_path, [_write(tmp_path, "a.lua")], None)
+    assert ran == []
+    assert not (tmp_path / "target").exists()
+
+
+def test_cluacov_version_is_empty_when_the_interpreter_cannot_load_it(tmp_path):
+    assert lua_cluacov_version(str(tmp_path / "missing-lua")) == ""
+
+
+def test_cluacov_version_reads_the_installed_module():
+    lua = lua_interpreter()
+    if lua is None or not lua_cluacov_version(lua):
+        pytest.skip("Lua 5.4 with cluacov is not installed")
+    assert lua_cluacov_version(lua) == "1.0.0"
+
+
 def test_lua_coverage_config_and_commands(tmp_path):
     stats = tmp_path / "out" / "luacov.stats.out"
     report = tmp_path / "out" / "lcov.info"
@@ -143,6 +168,7 @@ def test_lua_modules_only_receive_their_own_selected_files(tmp_path, monkeypatch
         return original(stats, report, source_files, directory)
     monkeypatch.setattr(runners, "lua_coverage_config", capture)
     monkeypatch.setattr(runners, "lua_interpreter", lambda: "lua")
+    monkeypatch.setattr(runners, "lua_cluacov_version", lambda lua: "1.0.0")
     monkeypatch.setattr(runners, "run_shell", lambda *args: 0)
     monkeypatch.setattr(runners, "_record_lua_lcov", lambda *args: None)
     monkeypatch.setattr(runners, "_fresh_lcov", lambda *args: {})

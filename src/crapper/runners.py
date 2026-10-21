@@ -488,6 +488,9 @@ def _cover_rust(root: Path, files: list[Path]) -> None:
 
 
 _LUA_VERSION = "Lua 5.4"
+# LuaCov switches to cluacov's C line hook and active-line analysis whenever it
+# loads. Both change which lines count, so coverage requires one pinned version.
+_CLUACOV_VERSION = "1.0.0"
 _LUA_EXCLUDE = ("^/", "^%a:", "_spec$", "^spec/", "/spec/", "^lua_modules/", "^%.luarocks/", "^target/")
 
 
@@ -597,6 +600,21 @@ def _lua_package_setup(lua: str) -> str:
     return ""
 
 
+def lua_cluacov_version(lua: str) -> str:
+    """The cluacov version the interpreter loads, or "" when it cannot load one."""
+
+    loader = _lua_package_setup(lua) + "pcall(require, 'luarocks.loader'); "
+    try:
+        completed = subprocess.run(
+            [lua, "-e", loader + "local ok, v = pcall(require, 'cluacov.version'); "
+             "if ok and type(v) == 'string' then io.write(v) end"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return ""
+    return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
 def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]:
     # Run both tools in the selected interpreter. Busted's --lua re-execution
     # joins arguments into a shell string; LuaRocks BAT launchers add another
@@ -649,6 +667,11 @@ def _cover_lua(root: Path, files: list[Path], reports: list[tuple[Path, Path]]) 
     lua = lua_interpreter()
     if lua is None:
         raise CoverageError("No Lua 5.4 interpreter (lua5.4 or lua) on PATH for Lua coverage.")
+    cluacov = lua_cluacov_version(lua)
+    if cluacov != _CLUACOV_VERSION:
+        found = f"found {cluacov}" if cluacov else "not installed"
+        raise CoverageError(f"Lua coverage requires cluacov {_CLUACOV_VERSION} for {lua} ({found}): "
+                            f"luarocks --lua-version=5.4 install cluacov {_CLUACOV_VERSION}-1")
     fresh = {}
     for module, report in reports:
         stats = report.parent / "luacov.stats.out"

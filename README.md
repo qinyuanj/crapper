@@ -168,7 +168,7 @@ Rust counts `if`, loops, each `match` arm, `?`, and `&&` / `||`. `mod tests` is 
 
 Python counts `if`, `elif`, `for`, `while`, `except`, each `match` case, a comprehension filter, a conditional expression, and each `and` / `or`. Nested functions stay inside the enclosing function. Coverage is LCOV from `coverage.py`, running pytest when the project uses it and `unittest` otherwise. `coverage` and `pytest` are installed into the project's interpreter when they are missing.
 
-Lua counts `if`, `elseif`, `while`, `repeat`, both `for` forms, and each `and` / `or`. `goto` does not count. Function declarations and function expressions assigned to a name are entries; nested functions and unassigned closures stay inside the enclosing function. Coverage is LCOV from busted with luacov and `luacov-reporter-lcov`, run with a Lua 5.4 interpreter (`lua5.4`, then `lua`) in the nearest directory that contains `.busted` or a rockspec. Nothing is installed automatically.
+Lua counts `if`, `elseif`, `while`, `repeat`, both `for` forms, and each `and` / `or`. `goto` does not count. Function declarations and function expressions assigned to a name are entries; nested functions and unassigned closures stay inside the enclosing function. Coverage is LCOV from busted with luacov, cluacov 1.0.0, and `luacov-reporter-lcov`, run with a Lua 5.4 interpreter (`lua5.4`, then `lua`) in the nearest directory that contains `.busted` or a rockspec. LuaCov switches to cluacov's C hook and active-line analysis whenever it can load it, which changes which lines count, so crapper requires that exact version. Nothing is installed automatically.
 
 ## Coverage commands
 
@@ -188,7 +188,7 @@ For languages other than Lua, a missing tool or a failed test run leaves that la
 
 ## Coverage failure gate
 
-A custom `--coverage-command` that exits nonzero or cannot start stops the CLI before analysis and snapshot publication. Built-in Lua coverage also stops if Lua 5.4 is unavailable, Busted fails, LuaCov stats are missing, or LCOV conversion fails or produces no report. Diagnostics identify the failed stage, and the CLI exits **1**. A failed Busted run never proceeds to conversion, even when it leaves partial stats.
+A custom `--coverage-command` that exits nonzero or cannot start stops the CLI before analysis and snapshot publication. Built-in Lua coverage also stops if Lua 5.4 is unavailable, cluacov 1.0.0 is not the version that interpreter loads, Busted fails, LuaCov stats are missing, or LCOV conversion fails or produces no report. Diagnostics identify the failed stage, and the CLI exits **1**. A failed Busted run never proceeds to conversion, even when it leaves partial stats.
 
 On these failures, `.metrics/crap.edn` remains byte-for-byte unchanged if it already exists; otherwise no snapshot is created. The preserved snapshot describes an earlier run, so consumers must check the CLI result before treating it as current. `--use-existing-coverage` explicitly bypasses coverage execution and retains the legacy permissive report loader.
 
@@ -202,7 +202,7 @@ Custom command strings retain shell syntax and run from `--root`. Quote argument
 
 A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their existing warning-and-N/A behavior.
 
-On macOS, execution assumes Python 3.11+, a Lua 5.4 interpreter on PATH, and Busted, LuaCov, and `luacov-reporter-lcov` installed for that interpreter. Custom commands use the POSIX shell and built-in Lua uses native argument-vector execution. These macOS assumptions have not been runtime-validated.
+On macOS, execution assumes Python 3.11+, a Lua 5.4 interpreter on PATH, and Busted, LuaCov, cluacov 1.0.0, and `luacov-reporter-lcov` installed for that interpreter. Custom commands use the POSIX shell and built-in Lua uses native argument-vector execution. These macOS assumptions have not been runtime-validated.
 
 ## Windows
 
@@ -214,7 +214,7 @@ python -m venv .venv
 .\.venv\Scripts\crapper.exe --root "C:\path\to\project"
 ```
 
-Install the coverage tools for the languages in your project separately. Lua coverage needs Lua 5.4, busted, luacov, and luacov-reporter-lcov. Put `lua5.4` or `lua` on PATH. crapper resolves Windows Lua wrappers to the native interpreter and runs the coverage modules directly, so interpreter, project, and configuration paths can contain spaces.
+Install the coverage tools for the languages in your project separately. Lua coverage needs Lua 5.4, busted, luacov, cluacov 1.0.0 (`luarocks --lua-version=5.4 install cluacov 1.0.0-1`), and luacov-reporter-lcov. Snapshots recorded without cluacov change once on the first refresh with it. Put `lua5.4` or `lua` on PATH. crapper resolves Windows Lua wrappers to the native interpreter and runs the coverage modules directly, so interpreter, project, and configuration paths can contain spaces.
 
 The full test suite and Lua coverage with paths containing spaces were validated on Windows 11 with Python 3.12 and Lua 5.4.6. This does not verify every language's external coverage toolchain. Built-in commands use argument vectors; custom `--coverage-command` strings use the Windows shell.
 
@@ -230,7 +230,7 @@ WSL2 with Ubuntu is also an installation option:
    ```
 
 3. Run `crapper/scripts/setup-ubuntu.sh`. It installs Python, Lua 5.4,
-   busted, luacov, and luacov-reporter-lcov, then creates `.venv`.
+   busted, luacov, cluacov 1.0.0, and luacov-reporter-lcov, then creates `.venv`.
 4. Edit in VS Code with the WSL extension (`code .` from Ubuntu).
 
 Under WSL2, crapper warns when the project is under `/mnt/`.
