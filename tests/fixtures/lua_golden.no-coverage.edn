@@ -1,0 +1,17 @@
+{:entries [
+  {:name "M.walk", :namespace "shapes.modern", :complexity 4, :coverage nil, :crap nil}
+  {:name "thing.describe", :namespace "deep.thing", :complexity 3, :coverage nil, :crap nil}
+  {:name "Account:deposit", :namespace "shapes", :complexity 3, :coverage nil, :crap nil}
+  {:name "M.counter", :namespace "shapes", :complexity 3, :coverage nil, :crap nil}
+  {:name "M.closing", :namespace "shapes.modern", :complexity 3, :coverage nil, :crap nil}
+  {:name "M.find", :namespace "shapes.modern", :complexity 3, :coverage nil, :crap nil}
+  {:name "M.never", :namespace "shapes.untested", :complexity 3, :coverage nil, :crap nil}
+  {:name "Account.new", :namespace "shapes", :complexity 2, :coverage nil, :crap nil}
+  {:name "M.first", :namespace "shapes", :complexity 2, :coverage nil, :crap nil}
+  {:name "M.second", :namespace "shapes", :complexity 2, :coverage nil, :crap nil}
+  {:name "M.sorted", :namespace "shapes", :complexity 2, :coverage nil, :crap nil}
+  {:name "helper", :namespace "shapes", :complexity 2, :coverage nil, :crap nil}
+  {:name "tag", :namespace "shapes", :complexity 1, :coverage nil, :crap nil}
+  {:name "M.bits", :namespace "shapes.modern", :complexity 1, :coverage nil, :crap nil}
+  {:name "M.halves", :namespace "shapes.modern", :complexity 1, :coverage nil, :crap nil}
+]}

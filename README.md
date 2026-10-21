@@ -152,9 +152,16 @@ TypeScript and TSX use the same structural decisions as Java, including `&&` ins
 
 Rust counts `if`, loops, each `match` arm, `?`, and `&&` / `||`. `mod tests` is skipped. Coverage is LCOV from `cargo llvm-cov` or `cargo tarpaulin`, run in the nearest directory that contains `Cargo.toml`. When neither tool is installed, the run installs `cargo-llvm-cov`.
 
-Python counts `if`, `elif`, `for`, `while`, `except`, each `match` case, a comprehension filter, a conditional expression, and each `and` / `or`. Nested functions stay inside the enclosing function. Coverage is LCOV from `coverage.py`, running pytest when the project uses it and `unittest` otherwise. `coverage` and `pytest` are installed into the project's interpreter when they are missing.
+Python counts `if`, `elif`, `for`, `while`, `except`, each `match` case, a comprehension filter, a conditional expression, and each `and` / `or`. Nested functions stay inside the enclosing function. Coverage is LCOV from `coverage.py`, running pytest when the project uses it and `unittest` otherwise. When the project's interpreter cannot import `coverage`, Python coverage is N/A and nothing is installed; a missing `pytest` is installed into that interpreter.
 
-Lua counts `if`, `elseif`, `while`, `repeat`, both `for` forms, and each `and` / `or`. `goto` does not count. Function declarations and function expressions assigned to a name are entries; nested functions and unassigned closures stay inside the enclosing function. Coverage is LCOV from busted with luacov, cluacov 1.0.0, and `luacov-reporter-lcov`, run with a Lua 5.4 interpreter (`lua5.4`, then `lua`) in the nearest directory that contains `.busted` or a rockspec. LuaCov switches to cluacov's C hook and active-line analysis whenever it can load it, which changes which lines count, so crapper requires that exact version. Nothing is installed automatically.
+Lua counts `if`, `elseif`, `while`, `repeat`, both `for` forms, and each `and` / `or`. `goto` does not count. Function declarations and function expressions assigned to a name are entries; nested functions and unassigned closures stay inside the enclosing function. Coverage is LCOV from busted with luacov, cluacov 1.0.0, and `luacov-reporter-lcov`, run with a Lua 5.4 interpreter (`lua5.4`, then `lua`) in the nearest directory that contains `.busted` or a rockspec. LuaCov switches to cluacov's C hook and active-line analysis whenever it can load it, which changes which lines count, so crapper requires that exact version. Nothing is installed automatically. LuaCov records only the selected sources, not spec and support files.
+
+Lua coverage splits the spec files Busted's configuration selects (its `ROOT` and `pattern`) across coverage shards, one Busted process each, and sums their line hits before one LCOV report is written. The shard count defaults to the CPU count and never exceeds the number of spec files. Every shard must pass; one failing shard fails the run like a failed single Busted run. Spec files that share global state or depend on run order need `--lua-shards 1`, which keeps one process:
+
+```bash
+./crapper --full-tree --lua-shards 1     # one Busted process
+./crapper --full-tree --lua-shards 4     # at most four
+```
 
 ## Coverage commands
 
@@ -216,6 +223,13 @@ Prepare and verify an environment for the current checkout:
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/python -m pytest
+```
+
+`scripts/bench.py` times the three refresh modes on a copy of a project and compares each snapshot byte for byte with recorded references:
+
+```bash
+.venv/bin/python scripts/bench.py /tmp/copy --reference /tmp/ref --record -- --source-root src
+.venv/bin/python scripts/bench.py /tmp/copy --reference /tmp/ref -- --source-root src
 ```
 
 Local runs without the Lua toolchain can skip integration tests, so check the pytest summary before claiming Lua coverage was validated.

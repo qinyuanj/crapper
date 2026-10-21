@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from crapper.coverage import CoverageBundle, load_bundle, read_fresh_lcov
@@ -315,9 +317,12 @@ def python_coverage_commands(
     return run, lcov
 
 
-def _ensure_python_module(py: str, package: Path, module: str) -> bool:
+def _ensure_python_module(py: str, package: Path, module: str, install: bool = True) -> bool:
+    """install=False turns ensure into a probe: report, but never touch the interpreter."""
     if run_shell([py, "-c", "import " + module], package) == 0:
         return True
+    if not install:
+        return False
     _warn(
         f"Installing {module} for Python coverage. "
         "The project requirements are left unchanged."
@@ -452,8 +457,10 @@ def _cover_python(root: Path, files: list[Path]) -> None:
     for package in python_roots(root, files):
         report = _coverage_report(root, package, "python")
         py = _python_executable(package)
-        if not _ensure_python_module(py, package, "coverage"):
-            _warn(f"coverage is missing in {package}. Python coverage will be N/A.")
+        # Probe rather than install: a Lua tree with a few helper scripts should
+        # not pay for, or change its environment through, a failing install.
+        if not _ensure_python_module(py, package, "coverage", False):
+            _warn(f"coverage is missing in {package}; {py} cannot import it. Python coverage will be N/A.")
             continue
         report.parent.mkdir(parents=True, exist_ok=True)
         data_file = report.parent / ".coverage"
@@ -489,28 +496,33 @@ _CLUACOV_VERSION = "1.0.0"
 _LUA_EXCLUDE = ("^/", "^%a:", "_spec$", "^spec/", "/spec/", "^lua_modules/", "^%.luarocks/", "^target/")
 
 
-def _nearest_lua_root(start: Path, stop: Path) -> Path | None:
-    current = start if start.is_dir() else start.parent
-    stop = stop.resolve()
-    while True:
-        if (current / ".busted").is_file() or any(current.glob("*.rockspec")):
-            return current
-        if current == stop or current.parent == current:
-            return None
-        current = current.parent
+def _nearest_lua_root(directory: Path, stop: Path, found: dict[Path, Path | None]) -> Path | None:
+    """Memoized per directory, so sibling files share one walk."""
+
+    if directory not in found:
+        if (directory / ".busted").is_file() or any(directory.glob("*.rockspec")):
+            found[directory] = directory
+        elif directory == stop or directory.parent == directory:
+            found[directory] = None
+        else:
+            found[directory] = _nearest_lua_root(directory.parent, stop, found)
+    return found[directory]
 
 
-def lua_roots(root: Path, files: list[Path]) -> list[Path]:
-    """The nearest directory with `.busted` or a rockspec, else the project root."""
+def lua_modules(root: Path, files: list[Path]) -> dict[Path, list[Path]]:
+    """Lua files grouped by their nearest `.busted` or rockspec directory, else the project root."""
 
-    found: set[Path] = set()
     root = root.resolve()
+    found: dict[Path, Path | None] = {}
+    modules: dict[Path, list[Path]] = {}
     for file in files:
         if Path(file).suffix != ".lua":
             continue
-        module = _nearest_lua_root(Path(file).resolve(), root)
-        found.add((module or root).resolve())
-    return sorted(found)
+        module = _nearest_lua_root(Path(file).resolve().parent, root, found)
+        modules.setdefault((module or root).resolve(), []).append(file)
+    return dict(sorted(modules.items()))
+
+
 
 
 def _lua_version(binary: str) -> str:
@@ -540,6 +552,14 @@ def _lua_string(text: str) -> str:
     return "[" + equals + "[" + text + "]" + equals + "]"
 
 
+def _lua_include(relative: str) -> list[str]:
+    """Anchored LuaCov patterns for one source; LuaCov drops `.lua` before matching."""
+
+    name = re.sub(r"([\^$()%.\[\]*+\-?])", r"%\1", relative.removesuffix(".lua"))
+    # cluacov's hook keeps the `./` prefix that LuaCov's own hook strips.
+    return ["^" + name + "$", "^%./" + name + "$"]
+
+
 def lua_coverage_config(
     stats: Path, report: Path, source_files: list[Path] | None = None, directory: Path | None = None,
 ) -> str:
@@ -547,12 +567,15 @@ def lua_coverage_config(
     selected = sorted({os.path.relpath(Path(path).resolve(), directory).replace("\\", "/")
                        for path in (source_files or [])})
     untested = ", ".join(_lua_string(path) for path in selected)
+    # Record only the selected sources: spec and support files are never published.
+    include = ", ".join(_lua_string(pattern) for path in selected for pattern in _lua_include(path))
     exclude = ", ".join(_lua_string(pattern) for pattern in _LUA_EXCLUDE)
     return (
         "return {\n"
         f"  statsfile = {_lua_string(str(stats))},\n"
         f"  reportfile = {_lua_string(str(report))},\n"
         f"  includeuntestedfiles = {{{untested}}},\n"
+        f"  include = {{{include}}},\n"
         f"  exclude = {{{exclude}}},\n"
         "}\n"
     )
@@ -631,24 +654,149 @@ def _record_lua_lcov(module: Path, code: int, stats: Path, report: Path, lcov_cm
         raise CoverageError(f"LuaCov LCOV normalization failed in {module}: {exc}") from exc
 
 
-def _cover_lua(root: Path, files: list[Path], reports: list[tuple[Path, Path]]) -> dict:
+# Busted's own option parsing and file loader list the spec files a single run
+# would load, so the shards' union is exactly that run's selection.
+_BUSTED_SPECS = (
+    "pcall(require, 'luarocks.loader'); "
+    "local options = require('pl.tablex').update(require('busted.options'), {standalone = false}); "
+    "local args = assert(require('busted.modules.cli')(options):parse({'--ignore-lua'})); "
+    "local path = require('pl.path'); assert(path.chdir(path.normpath(args.directory))); "
+    "local _, _, list = require('busted.modules.test_file_loader')(require('busted.core')(), args.loaders); "
+    "for _, file in ipairs(list(args.ROOT, args.pattern, "
+    "{excludes = args['exclude-pattern'], recursive = args.recursive})) do io.write(file, '\\n') end"
+)
+
+
+def run_captured(command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    """Run argv with its output held, so concurrent runs do not interleave."""
+    try:
+        return subprocess.run(command, cwd=cwd, capture_output=True, text=True, errors="replace")
+    except OSError as exc:
+        return subprocess.CompletedProcess(command, 127, "", f"Coverage command failed to start: {exc}\n")
+
+
+def lua_spec_files(lua: str, module: Path) -> list[str]:
+    """Spec files, relative to Busted's directory, per the module's Busted configuration."""
+
+    completed = run_captured([lua, "-e", _BUSTED_SPECS], module)
+    if completed.returncode != 0:
+        _warn(f"Cannot list Busted spec files in {module}; running one coverage shard.\n{completed.stderr}")
+        return []
+    return [line for line in completed.stdout.splitlines() if line]
+
+
+def shard_specs_by_size(specs: list[str], count: int, base: Path) -> list[list[str]]:
+    """Split specs into coverage shards by size; Busted's order within each shard."""
+
+    def size(spec: str) -> int:
+        try:
+            return (base / spec).stat().st_size
+        except OSError:
+            return 0
+
+    order = {spec: index for index, spec in enumerate(specs)}
+    shards: list[list[str]] = [[] for _ in range(count)]
+    loads = [0] * count
+    for spec in sorted(specs, key=lambda spec: (-size(spec), order[spec])):
+        lightest = min(range(count), key=lambda index: (loads[index], index))
+        shards[lightest].append(spec)
+        loads[lightest] += size(spec)
+    return [sorted(shard, key=order.__getitem__) for shard in shards]
+
+
+def merge_luacov_stats(parts: list[Path], target: Path) -> None:
+    """Sum LuaCov line hits per file and line, in LuaCov's own stats format."""
+
+    merged: dict[bytes, list[int]] = {}
+    for part in parts:
+        lines = part.read_bytes().split(b"\n")
+        for header, counts in zip(lines[0::2], lines[1::2]):
+            _, _, name = header.partition(b":")
+            hits = merged.setdefault(name, [])
+            for index, count in enumerate(counts.split()):
+                if index == len(hits):
+                    hits.append(0)
+                hits[index] += int(count)
+    with target.open("wb") as stream:
+        for name in sorted(merged):
+            hits = merged[name]
+            stream.write(b"%d:%s\n" % (len(hits), name))
+            stream.write(b"".join(b"%d " % count for count in hits) + b"\n")
+
+
+def _shard_artifacts(directory: Path) -> list[Path]:
+    return sorted(directory.glob("luacov.shard-*"))
+
+
+def _write_lua_config(config: Path, stats: Path, report: Path, selected: list[Path], module: Path) -> None:
+    try:
+        config.write_text(lua_coverage_config(stats, report, selected, module), encoding="utf-8")
+    except OSError as exc:
+        raise CoverageError(f"Cannot prepare LuaCov config: {exc}") from exc
+
+
+def _run_lua_shards(lua: str, module: Path, report: Path, selected: list[Path],
+                    groups: list[list[str]], stats: Path, lcov_cmd: list[str]) -> None:
+    """Run each coverage shard under its own stats file, then sum them into `stats`."""
+
+    shards = [(report.parent / f"luacov.shard-{index}.cfg.lua",
+               report.parent / f"luacov.shard-{index}.stats.out") for index in range(1, len(groups) + 1)]
+    try:
+        commands = []
+        for (config, shard_stats), group in zip(shards, groups):
+            _write_lua_config(config, shard_stats, report, selected, module)
+            commands.append(lua_coverage_commands(lua, config)[0] + group)
+        _warn(f"+ ({module}) Busted in {len(groups)} coverage shards: "
+              f"{shlex.join(lcov_cmd[:1])} -e '<busted runner>' -- busted …")
+        with ThreadPoolExecutor(len(commands)) as pool:
+            results = list(pool.map(lambda command: run_captured(command, module), commands))
+        for completed in results:
+            sys.stdout.write(completed.stdout)
+            sys.stderr.write(completed.stderr)
+        sys.stdout.flush()
+        for index, completed in enumerate(results, 1):
+            if completed.returncode != 0:
+                raise CoverageError(f"Lua tests exited {completed.returncode} in coverage shard "
+                                    f"{index} of {len(groups)} in {module}.")
+        for _, shard_stats in shards:
+            if not shard_stats.is_file():
+                raise CoverageError(f"LuaCov stats missing after Lua tests in {module}: {shard_stats}")
+        try:
+            merge_luacov_stats([shard_stats for _, shard_stats in shards], stats)
+        except (OSError, ValueError) as exc:
+            stats.unlink(missing_ok=True)
+            raise CoverageError(f"Cannot sum LuaCov stats in {module}: {exc}") from exc
+    finally:
+        _invalidate_artifacts(_shard_artifacts(report.parent))
+
+
+def _cover_lua(root: Path, files: list[Path], reports: list[tuple[Path, Path]], shards: int) -> dict:
     lua = lua_interpreter()
     if lua is None:
         raise CoverageError("No Lua 5.4 interpreter (lua5.4 or lua) on PATH for Lua coverage.")
     require_lua_cluacov(lua)
+    modules = lua_modules(root, files)
     fresh = {}
     for module, report in reports:
         stats = report.parent / "luacov.stats.out"
         config = report.parent / "luacov.cfg.lua"
+        selected = modules[module]
         try:
             report.parent.mkdir(parents=True, exist_ok=True)
-            selected = [path for path in files if Path(path).suffix == ".lua"
-                        and lua_roots(root, [path]) == [module]]
-            config.write_text(lua_coverage_config(stats, report, selected, module), encoding="utf-8")
+            _write_lua_config(config, stats, report, selected, module)
         except OSError as exc:
             raise CoverageError(f"Cannot prepare LuaCov config: {exc}") from exc
         run_cmd, lcov_cmd = lua_coverage_commands(lua, config)
-        _record_lua_lcov(module, run_shell(run_cmd, module), stats, report, lcov_cmd)
+        specs = lua_spec_files(lua, module) if shards > 1 else []
+        count = min(shards, len(specs))
+        if count > 1:
+            # Shards ran all specs and summed their stats into `stats`.
+            _run_lua_shards(lua, module, report, selected,
+                            shard_specs_by_size(specs, count, module), stats, lcov_cmd)
+            code = 0
+        else:
+            code = run_shell(run_cmd, module)
+        _record_lua_lcov(module, code, stats, report, lcov_cmd)
         fresh.update(_fresh_lcov(report, module))
     return fresh
 
@@ -668,8 +816,13 @@ def _invalidate_artifacts(paths: list[Path]) -> None:
         raise CoverageError(f"Cannot invalidate managed coverage artifact: {exc}") from exc
 
 
-def run_coverage(root: Path, files: list[Path], command: str | None) -> CoverageBundle | None:
-    """Return validated custom/Lua coverage; other runners retain legacy loading."""
+def run_coverage(
+    root: Path, files: list[Path], command: str | None, lua_shards: int | None = None,
+) -> CoverageBundle | None:
+    """Return validated custom/Lua coverage; other runners retain legacy loading.
+
+    Lua coverage runs in `lua_shards` coverage shards, by default one per CPU.
+    """
 
     root = root.resolve()
     if command:
@@ -681,11 +834,12 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> Coverage
         return CoverageBundle(fresh_lcov=_fresh_lcov(report, root), source_root=root)
 
     languages = _languages_in(files)
-    lua_reports = [(module, _coverage_report(root, module, "lua")) for module in lua_roots(root, files)]
+    lua_reports = [(module, _coverage_report(root, module, "lua")) for module in lua_modules(root, files)]
     if len({report for _, report in lua_reports}) != len(lua_reports):
         raise CoverageError("Lua modules have colliding managed report paths.")
     _invalidate_artifacts([path for _, report in lua_reports
-                           for path in (report, report.parent / "luacov.stats.out")])
+                           for path in (report, report.parent / "luacov.stats.out",
+                                        *_shard_artifacts(report.parent))])
     if "clojure" in languages:
         _cover_clojure(root)
     if "java" in languages:
@@ -699,7 +853,7 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> Coverage
     if "rust" in languages:
         _cover_rust(root, files)
     if "lua" in languages:
-        fresh = _cover_lua(root, files, lua_reports)
+        fresh = _cover_lua(root, files, lua_reports, lua_shards or os.cpu_count() or 1)
         bundle = load_bundle(root) if languages - {"lua"} else CoverageBundle()
         bundle.managed_lua = fresh
         bundle.source_root = root

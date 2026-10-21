@@ -5,7 +5,7 @@ description = "CRAP scores for Clojure, Java, Go, TypeScript, Rust, Python, and 
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "tree-sitter>=0.24",
+    "tree-sitter>=0.25",
     "tree-sitter-language-pack>=0.7",
 ]
 

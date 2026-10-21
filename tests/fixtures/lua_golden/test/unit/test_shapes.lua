@@ -1,0 +1,25 @@
+local shapes = require("shapes")
+
+describe("shapes", function()
+  it("sorts both ways", function()
+    assert.same({ 1, 2, 3 }, shapes.sorted({ 3, 1, 2 }))
+    assert.same({ 3, 2, 1 }, shapes.sorted({ 3, 1, 2 }, true))
+  end)
+
+  it("deposits", function()
+    local account = shapes.Account.new(5)
+    assert.equal(15, account:deposit(10))
+    assert.has_error(function() account:deposit(-1) end)
+  end)
+
+  it("counts", function()
+    local step = shapes.counter()
+    assert.equal(1, step())
+    assert.equal(4, step(3))
+  end)
+
+  it("reads pairs", function()
+    assert.equal(1, shapes.first({ first = 1 }))
+    assert.equal("small", shapes.helper(2))
+  end)
+end)

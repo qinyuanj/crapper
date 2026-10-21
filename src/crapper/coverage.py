@@ -294,8 +294,59 @@ def parse_jacoco_index(text: str) -> dict[str, list[JacocoMethod]]:
     return found
 
 
+class _ExactIndex:
+    """First record per normcased absolute path, as a linear scan would find it."""
+
+    def __init__(self, records: dict[str, dict[int, tuple[int, int]]]):
+        self._records: dict[str, dict[int, tuple[int, int]]] = {}
+        for key, lines in records.items():
+            self._records.setdefault(os.path.normcase(key), lines)
+
+    def get(self, path: Path) -> dict[int, tuple[int, int]] | None:
+        return self._records.get(os.path.normcase(str(path)))
+
+
+class _SuffixIndex:
+    """Legacy exact-then-suffix path matching, indexed once instead of per call.
+
+    The suffix fallback returns the earliest record, in report order, whose path
+    ends with any candidate, so each suffix keeps its earliest record position.
+    """
+
+    def __init__(self, records: dict[str, dict]):
+        self._normalized = {normalize_path(key): value for key, value in records.items()}
+        self._suffixes: dict[tuple[str, ...], tuple[int, dict]] = {}
+        for position, (key, value) in enumerate(self._normalized.items()):
+            parts = _segments(key)
+            for length in range(1, len(parts) + 1):
+                self._suffixes.setdefault(tuple(parts[-length:]), (position, value))
+        self._found: dict[str, dict | None] = {}
+
+    def get(self, source_path: str):
+        if source_path not in self._found:
+            self._found[source_path] = self._match(source_path)
+        return self._found[source_path]
+
+    def _match(self, source_path: str):
+        if not self._normalized:
+            return None
+        candidates = _candidates(source_path)
+        for candidate in candidates:
+            if candidate in self._normalized:
+                return self._normalized[candidate]
+        matches = [self._suffixes[key] for key in (tuple(_segments(c)) for c in candidates)
+                   if key and key in self._suffixes]
+        return min(matches, key=lambda match: match[0])[1] if matches else None
+
+
 @dataclass
 class CoverageBundle:
+    """Coverage for every analyzed function.
+
+    Record lookups are indexed on first use, so the record maps must be
+    complete before the first `percent_for` call.
+    """
+
     lcov: dict[str, dict[int, tuple[int, int]]] = field(default_factory=dict)
     go_profile: dict[str, list[tuple[int, int, int, int]]] | None = None
     jacoco: dict[str, list[JacocoMethod]] | None = None
@@ -303,12 +354,17 @@ class CoverageBundle:
     managed_lua: dict[str, dict[int, tuple[int, int]]] | None = None
     fresh_lcov: dict[str, dict[int, tuple[int, int]]] | None = None
     source_root: Path | None = None
+    _indexes: dict[str, object] = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def _index(self, name: str, build):
+        if name not in self._indexes:
+            self._indexes[name] = build()
+        return self._indexes[name]
 
     def percent_for(self, function: Function) -> float | None:
         if function.language == "lua" and self.managed_lua is not None:
-            path = os.path.normcase(str((self.source_root / function.path).resolve()))
-            lines = next((lines for key, lines in self.managed_lua.items()
-                          if os.path.normcase(key) == path), None)
+            index = self._index("managed_lua", lambda: _ExactIndex(self.managed_lua))
+            lines = index.get((self.source_root / function.path).resolve())
             return percent_for_range(lines, function.start_line, function.end_line)
         if function.language == "java":
             names = []
@@ -331,29 +387,15 @@ class CoverageBundle:
         )
 
     def _html_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
-        return _lookup(self.form_html, path)
+        return self._index("form_html", lambda: _SuffixIndex(self.form_html)).get(path)
 
     def _lcov_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
         if self.fresh_lcov is not None:
-            source = (self.source_root / path).resolve()
             # Fresh sources use project-anchored exact identity; legacy imports
             # retain their historical suffix matching.
-            return next((lines for key, lines in self.fresh_lcov.items()
-                         if os.path.normcase(key) == os.path.normcase(str(source))), None)
-        return _lookup(self.lcov, path)
-
-
-def _lookup(index: dict[str, dict], source_path: str):
-    if not index:
-        return None
-    normalized = {normalize_path(key): value for key, value in index.items()}
-    for candidate in _candidates(source_path):
-        if candidate in normalized:
-            return normalized[candidate]
-    for key, value in normalized.items():
-        if any(suffix_match(key, candidate) for candidate in _candidates(source_path)):
-            return value
-    return None
+            index = self._index("fresh_lcov", lambda: _ExactIndex(self.fresh_lcov))
+            return index.get((self.source_root / path).resolve())
+        return self._index("lcov", lambda: _SuffixIndex(self.lcov)).get(path)
 
 
 def _read(path: Path) -> str | None:

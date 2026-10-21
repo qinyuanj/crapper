@@ -1,0 +1,7 @@
+return {
+  default = {
+    ROOT = { "test/unit", "test/contract" },
+    pattern = "test_",
+    lpath = "src/?.lua;src/?/init.lua;src/lua/?.lua",
+  },
+}

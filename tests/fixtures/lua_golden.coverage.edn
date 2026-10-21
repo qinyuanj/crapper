@@ -1,0 +1,17 @@
+{:entries [
+  {:name "M.walk", :namespace "shapes.modern", :complexity 4, :coverage 0.0, :crap 20.0}
+  {:name "M.never", :namespace "shapes.untested", :complexity 3, :coverage 0.0, :crap 12.0}
+  {:name "M.find", :namespace "shapes.modern", :complexity 3, :coverage 83.3333, :crap 3.0417}
+  {:name "M.counter", :namespace "shapes", :complexity 3, :coverage 85.7143, :crap 3.0262}
+  {:name "thing.describe", :namespace "deep.thing", :complexity 3, :coverage 100.0, :crap 3.0}
+  {:name "Account:deposit", :namespace "shapes", :complexity 3, :coverage 100.0, :crap 3.0}
+  {:name "M.closing", :namespace "shapes.modern", :complexity 3, :coverage 100.0, :crap 3.0}
+  {:name "M.second", :namespace "shapes", :complexity 2, :coverage 50.0, :crap 2.5}
+  {:name "helper", :namespace "shapes", :complexity 2, :coverage 66.6667, :crap 2.1481}
+  {:name "Account.new", :namespace "shapes", :complexity 2, :coverage 100.0, :crap 2.0}
+  {:name "M.first", :namespace "shapes", :complexity 2, :coverage 100.0, :crap 2.0}
+  {:name "M.sorted", :namespace "shapes", :complexity 2, :coverage 100.0, :crap 2.0}
+  {:name "tag", :namespace "shapes", :complexity 1, :coverage 0.0, :crap 2.0}
+  {:name "M.halves", :namespace "shapes.modern", :complexity 1, :coverage 50.0, :crap 1.125}
+  {:name "M.bits", :namespace "shapes.modern", :complexity 1, :coverage 100.0, :crap 1.0}
+]}

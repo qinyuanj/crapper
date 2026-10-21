@@ -1,4 +1,5 @@
 import os
+import subprocess
 import shutil
 from pathlib import Path
 
@@ -15,7 +16,9 @@ from crapper.runners import (
     lua_cluacov_version,
     lua_coverage_config,
     lua_interpreter,
-    lua_roots,
+    lua_modules,
+    merge_luacov_stats,
+    shard_specs_by_size,
     run_coverage,
     run_shell,
 )
@@ -39,7 +42,7 @@ def test_lua_root_is_the_nearest_busted_or_rockspec_directory(tmp_path):
         _write(tmp_path, "c/z.lua"),
         _write(tmp_path, "c/z.py"),
     ]
-    assert lua_roots(tmp_path, files) == [
+    assert list(lua_modules(tmp_path, files)) == [
         tmp_path.resolve(),
         (tmp_path / "a").resolve(),
         (tmp_path / "b").resolve(),
@@ -267,3 +270,63 @@ def test_fixture_project_end_to_end(tmp_path, monkeypatch, runtime_with_spaces):
         ("calc", "M.total", 2, 100.0),
         ("calc.util", "between", 2, 100.0),
     ]
+
+
+def _stub_sharded_lua(monkeypatch, failing_spec):
+    from crapper import runners
+    shell = []
+    monkeypatch.setattr(runners, "lua_interpreter", lambda: "/opt/lua5.4")
+    monkeypatch.setattr(runners, "lua_cluacov_version", lambda lua: "1.0.0")
+    monkeypatch.setattr(runners, "run_shell", lambda *args: shell.append(args) or 0)
+
+    def captured(command, cwd):
+        if command[2] == runners._BUSTED_SPECS:
+            return subprocess.CompletedProcess(command, 0, "spec/a_spec.lua\nspec/b_spec.lua\nspec/c_spec.lua\n", "")
+        config = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--coverage-config-file="))
+        Path(config.replace(".cfg.lua", ".stats.out")).write_text("1:src/a.lua\n1 \n")
+        return subprocess.CompletedProcess(command, 1 if failing_spec in command else 0, "", "")
+
+    monkeypatch.setattr(runners, "run_captured", captured)
+    return shell
+
+
+def test_one_failing_coverage_shard_fails_the_run_and_leaves_no_artifacts(tmp_path, monkeypatch):
+    shell = _stub_sharded_lua(monkeypatch, "spec/b_spec.lua")
+    source = _write(tmp_path, "src/a.lua", "return 1\n")
+    managed = tmp_path / "target/coverage/lua"
+    for name in ("lcov.info", "luacov.stats.out", "luacov.shard-9.stats.out"):
+        _write(managed, name, "stale")
+    with pytest.raises(CoverageError, match="coverage shard"):
+        run_coverage(tmp_path, [source], None, lua_shards=3)
+    assert shell == []
+    assert sorted(path.name for path in managed.iterdir()) == ["luacov.cfg.lua"]
+
+
+def test_shard_stats_are_summed_per_source_and_line(tmp_path):
+    parts = [_write(tmp_path, "one", "2:src/a.lua\n1 0 \n1:src/b.lua\n0 \n"),
+             _write(tmp_path, "two", "3:src/a.lua\n2 0 4 \n")]
+    merge_luacov_stats(parts, tmp_path / "merged")
+    assert (tmp_path / "merged").read_text() == "3:src/a.lua\n3 0 4 \n1:src/b.lua\n0 \n"
+
+
+def test_shard_specs_runs_every_spec_exactly_once(tmp_path):
+    specs = [f"spec/{name}_spec.lua" for name in "abcdefg"]
+    for index, spec in enumerate(specs):
+        _write(tmp_path, spec, "x" * (index * 10))
+    shards = shard_specs_by_size(specs, 3, tmp_path)
+    assert len(shards) == 3 and all(shards)
+    assert sorted(spec for shard in shards for spec in shard) == specs
+    assert all(shard == sorted(shard) for shard in shards)
+
+
+def test_selected_sources_alone_are_recorded(tmp_path):
+    lua = lua_interpreter()
+    if lua is None:
+        pytest.skip("Lua 5.4 unavailable")
+    files = [tmp_path / "src" / "a-b.lua", tmp_path / "src" / "c.lua", tmp_path.parent / "outside.lua"]
+    path = _write(tmp_path, "config.lua", lua_coverage_config(tmp_path / "s", tmp_path / "r", files, tmp_path))
+    check = ("local c = dofile(arg[0]); local function hit(name) "
+             "for _, p in ipairs(c.include) do if name:match(p) then return true end end end; "
+             "assert(hit('src/a-b') and hit('./src/c') and hit('../outside') "
+             "and not hit('src/aXb') and not hit('spec/c_spec') and not hit('x/src/c'))")
+    assert run_shell([lua, "-e", check, "--", str(path)], tmp_path) == 0

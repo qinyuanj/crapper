@@ -456,3 +456,12 @@ def test_python_coverage_module_missing_is_reported(tmp_path, monkeypatch, capsy
     source = _write(tmp_path, "src/app.py", "def run():\n    return 1\n")
     run_coverage(tmp_path, [source], None)
     assert "coverage is missing" in capsys.readouterr().err
+
+
+def test_python_without_coverage_is_na_without_an_install(tmp_path, monkeypatch, capsys):
+    ran = []
+    monkeypatch.setattr("crapper.runners.run_shell", lambda command, cwd: ran.append(command) or 1)
+    source = _write(tmp_path, "helper.py", "def run():\n    return 1\n")
+    assert run_coverage(tmp_path, [source], None) is None
+    assert ran == [["python3", "-c", "import coverage"]]
+    assert "coverage is missing" in capsys.readouterr().err

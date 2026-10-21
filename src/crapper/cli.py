@@ -45,6 +45,9 @@ Options:
   --coverage-command <cmd>      Run this command instead of the per-language
                                 coverage tools, then read the reports it wrote.
   --threshold <number>          Exit 2 when the worst CRAP score is above this.
+  --lua-shards <n>              Split Lua spec files across n Busted coverage
+                                shards. Default: the CPU count. 1 keeps one
+                                process for specs that share state.
 
 Arguments:
   path              File or directory to analyze. Test paths are included when
@@ -91,6 +94,7 @@ class Options:
     threshold: float | None = None
     changed: bool = False
     full_tree: bool = False
+    lua_shards: int | None = None
 
 
 def _take(args: list[str], index: int, option: str) -> str:
@@ -130,6 +134,13 @@ def parse_args(argv: list[str] | None = None) -> Options:
                     options.threshold = float(raw)
                 except ValueError as exc:
                     raise ValueError("--threshold requires a number") from exc
+                index += 2
+                continue
+            if arg == "--lua-shards":
+                raw = _take(args, index, arg)
+                if not raw.isdigit() or int(raw) < 1:
+                    raise ValueError("--lua-shards requires a positive integer")
+                options.lua_shards = int(raw)
                 index += 2
                 continue
             if arg == "--no-coverage":
@@ -301,7 +312,7 @@ def run(argv: list[str] | None = None) -> int:
     if not options.no_coverage and (files or options.coverage_command):
         if not options.use_existing_coverage:
             try:
-                bundle = run_coverage(root, files, options.coverage_command)
+                bundle = run_coverage(root, files, options.coverage_command, options.lua_shards)
             except CoverageError as exc:
                 print(f"Coverage failed: {exc}", file=sys.stderr)
                 return 1

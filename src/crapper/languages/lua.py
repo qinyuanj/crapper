@@ -6,42 +6,44 @@ assigned to a name (`local f = function`, `M.bar = function`). The name is
 written as in the source: `helper`, `M.foo`, `Account:deposit`. A nested
 function stays inside the enclosing function, and an anonymous closure that
 is never assigned is not an entry. The namespace is the `require` path.
+
+One tree-sitter query finds functions and decisions in C. Syntax-tree ranges
+nest, so containment by byte range stands in for walking ancestors and subtrees.
 """
 
+from bisect import bisect_left
+from functools import cache
+
+from tree_sitter import Query, QueryCursor
+
 from crapper.languages.treesitter import (
-    complexity,
-    descendants,
     end_line,
     node_text,
     parse,
+    parser_for,
     start_line,
 )
 from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
 
-_DECISIONS = {
-    "if_statement",
-    "elseif_statement",
-    "while_statement",
-    "repeat_statement",
-    "for_statement",
-}
-
-_FUNCTIONS = {"function_declaration", "function_definition"}
+_QUERY = """
+(function_declaration) @function
+(function_definition) @function
+(if_statement) @decision
+(elseif_statement) @decision
+(while_statement) @decision
+(repeat_statement) @decision
+(for_statement) @decision
+(binary_expression "and") @decision
+(binary_expression "or") @decision
+"""
 
 _ROOTS = ("src/lua/", "src/", "lua/")
 
 
-def _is_decision(node) -> bool:
-    if node.type in _DECISIONS:
-        return True
-    return node.type == "binary_expression" and any(
-        child.type in {"and", "or"} for child in node.children
-    )
-
-
-def _skip(node) -> bool:
-    return False
+@cache
+def _query() -> Query:
+    return Query(parser_for("lua").language, _QUERY)
 
 
 def _relative(path: str, project_root: str | None) -> str:
@@ -70,13 +72,31 @@ def _module_namespace(path: str, project_root: str | None) -> str:
     return relative.replace("/", ".")
 
 
-def _is_nested(node) -> bool:
-    current = node.parent
-    while current is not None:
-        if current.type in _FUNCTIONS:
-            return True
-        current = current.parent
-    return False
+def _top_level(functions) -> list:
+    """Functions not inside another function, in source order."""
+
+    found = []
+    open_ends: list[int] = []
+    for node in sorted(functions, key=lambda node: (node.start_byte, -node.end_byte)):
+        while open_ends and open_ends[-1] <= node.start_byte:
+            open_ends.pop()
+        if not open_ends:
+            found.append(node)
+        open_ends.append(node.end_byte)
+    return found
+
+
+def _complexity(node, decisions: list[tuple[int, int]]) -> int:
+    """1 plus each decision inside `node`, nested functions included."""
+
+    first = bisect_left(decisions, (node.start_byte, -1))
+    score = 1
+    for start, end in decisions[first:]:
+        if start >= node.end_byte:
+            break
+        if end <= node.end_byte:
+            score += 1
+    return score
 
 
 def _assigned_name(data: bytes, node):
@@ -125,10 +145,11 @@ def functions_in_source(
 ) -> list[Function]:
     data, tree = parse(source, "lua")
     namespace = _module_namespace(path, project_root)
+    captures = QueryCursor(_query()).captures(tree.root_node)
+    # A binary expression holds one operator, so no decision is captured twice.
+    decisions = sorted((node.start_byte, node.end_byte) for node in captures.get("decision", []))
     found: list[Function] = []
-    for node in descendants(tree.root_node):
-        if node.type not in _FUNCTIONS or _is_nested(node):
-            continue
+    for node in _top_level(captures.get("function", [])):
         entry = _entry(data, node)
         if entry is None:
             continue
@@ -137,7 +158,7 @@ def functions_in_source(
             Function(
                 name=name,
                 namespace=namespace,
-                complexity=complexity(node, _is_decision, _skip),
+                complexity=_complexity(node, decisions),
                 start_line=start_line(header),
                 end_line=end_line(node),
                 path=path,
