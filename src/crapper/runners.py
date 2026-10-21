@@ -615,6 +615,16 @@ def lua_cluacov_version(lua: str) -> str:
     return completed.stdout.strip() if completed.returncode == 0 else ""
 
 
+def require_lua_cluacov(lua: str) -> None:
+    """Stop Lua coverage unless `lua` loads the pinned cluacov version."""
+
+    cluacov = lua_cluacov_version(lua)
+    if cluacov != _CLUACOV_VERSION:
+        found = f"found {cluacov}" if cluacov else "not installed"
+        raise CoverageError(f"Lua coverage requires cluacov {_CLUACOV_VERSION} for {lua} ({found}): "
+                            f"luarocks --lua-version=5.4 install cluacov {_CLUACOV_VERSION}-1")
+
+
 def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]:
     # Run both tools in the selected interpreter. Busted's --lua re-execution
     # joins arguments into a shell string; LuaRocks BAT launchers add another
@@ -627,10 +637,12 @@ def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]
     lcov = [lua, "-e", loader +
             "local r = require('luacov.runner'); local c = r.load_config(arg[1]); "
             # LuaCov retains slash variants as different keys, including zero-hit
-            # selected files. Normalize before the reporter merges those keys.
-            "if package.config:sub(1, 1) == string.char(92) then "
-            "local real_name = r.real_name; "
-            "r.real_name = function(name) return (real_name(name):gsub(string.char(92), '/')) end end; "
+            # selected files, and cluacov's hook keeps the `./` that LuaCov's own
+            # hook strips. Normalize before the reporter merges those keys.
+            "local real_name = r.real_name; local windows = package.config:sub(1, 1) == string.char(92); "
+            "r.real_name = function(name) name = real_name(name); "
+            "if windows then name = name:gsub(string.char(92), '/') end; "
+            "return (name:gsub('^%./', '')) end; "
             "c.reporter = 'lcov'; r.run_report(c); os.exit(0)",
             "--", "luacov", str(config)]
     return run, lcov
@@ -667,11 +679,7 @@ def _cover_lua(root: Path, files: list[Path], reports: list[tuple[Path, Path]]) 
     lua = lua_interpreter()
     if lua is None:
         raise CoverageError("No Lua 5.4 interpreter (lua5.4 or lua) on PATH for Lua coverage.")
-    cluacov = lua_cluacov_version(lua)
-    if cluacov != _CLUACOV_VERSION:
-        found = f"found {cluacov}" if cluacov else "not installed"
-        raise CoverageError(f"Lua coverage requires cluacov {_CLUACOV_VERSION} for {lua} ({found}): "
-                            f"luarocks --lua-version=5.4 install cluacov {_CLUACOV_VERSION}-1")
+    require_lua_cluacov(lua)
     fresh = {}
     for module, report in reports:
         stats = report.parent / "luacov.stats.out"
