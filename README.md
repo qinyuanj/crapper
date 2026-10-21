@@ -65,9 +65,7 @@ paths without `..`; sources explicitly selected outside the project root are
 not matched by project-relative exclusions.
 
 These CLI scenarios were tested with backslash exclusions, absolute source
-roots, and project paths containing spaces. macOS uses the same
-project-relative matching rules with `/` paths and quoted globs; macOS
-execution has not been validated.
+roots, and project paths containing spaces.
 
 ## Complete business-tree refresh
 
@@ -115,9 +113,6 @@ retain exit code 2.
 Complete-tree selection, fresh standard Lua reporter coverage across client,
 common, and server roots, deletion, empty refreshes, and filesystem failure
 scenarios were tested through the CLI with project paths containing spaces.
-On macOS this assumes the destination filesystem supports atomic replacement
-of a sibling file and the process can create and replace files in `.metrics`;
-macOS execution has not been validated.
 
 ## Snapshot
 
@@ -192,8 +187,6 @@ Fresh custom and Lua LCOV must contain at least one completed `SF` record, posit
 Custom command strings retain shell syntax and run from `--root` through `/bin/sh`. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
 
 A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their existing warning-and-N/A behavior.
-
-On macOS, execution assumes Python 3.11+, a Lua 5.4 interpreter on PATH, and Busted, LuaCov, cluacov 1.0.0, and `luacov-reporter-lcov` installed for that interpreter. Custom commands use the POSIX shell and built-in Lua uses native argument-vector execution. These macOS assumptions have not been runtime-validated.
 
 ## WSL2
 
