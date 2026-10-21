@@ -109,43 +109,6 @@ def test_publication_filesystem_failures_are_diagnosed_without_partial_destinati
         assert list(blocker.parent.iterdir()) == [blocker]
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows file sharing semantics")
-@pytest.mark.parametrize("locked", ["snapshot", "source"])
-def test_native_windows_locked_file_preserves_snapshot_and_cleans_staging(tmp_path, locked):
-    import ctypes
-    from ctypes import wintypes
-
-    root = tmp_path / "business project"
-    source(root, "client/main.lua", "main")
-    destination = snapshot(root)
-    destination.parent.mkdir()
-    original = b"previous snapshot\x00\xff\r\n"
-    destination.write_bytes(original)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
-    ]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    locked_path = destination if locked == "snapshot" else root / "client/main.lua"
-    share = 1 if locked == "snapshot" else 0
-    handle = kernel32.CreateFileW(str(locked_path), 0x80000000, share, None, 3, 0x80, None)
-    if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        result = cli(root, "--full-tree", "--no-coverage")
-        assert result.returncode == 1
-        diagnostic = "Snapshot publication failed" if locked == "snapshot" else "Report rendering failed"
-        assert diagnostic in result.stderr
-        assert "Wrote " not in result.stderr
-        assert destination.read_bytes() == original
-        assert list(destination.parent.iterdir()) == [destination]
-    finally:
-        kernel32.CloseHandle(handle)
-
-
 @pytest.mark.parametrize("selection", [["client/main.lua"], ["main"], ["--changed"]])
 def test_legacy_narrowing_still_selects_partial_snapshot(tmp_path, selection):
     source(tmp_path, "client/main.lua", "main")

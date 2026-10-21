@@ -277,23 +277,16 @@ def test_run_shell_returns_the_child_status_and_reports_a_failed_start(tmp_path,
 
 
 def test_argv_executes_interpreter_and_script_paths_with_spaces(tmp_path):
-    # A real executable, rather than a mock, exercises Windows CreateProcess
-    # and POSIX exec argument handling. The venv keeps Python's runtime intact.
+    # A real executable, rather than a mock, exercises exec argument handling.
+    # The venv keeps Python's runtime intact.
     import venv
 
     environment = tmp_path / "python environment"
     venv.EnvBuilder(with_pip=False).create(environment)
-    executable = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    executable = environment / "bin" / "python"
     script = _write(tmp_path, "script directory/check arguments.py",
                     "import sys\nassert sys.argv[1:] == ['path with spaces', 'a&b', \"quote'word\"]\n")
     assert run_shell([str(executable), str(script), "path with spaces", "a&b", "quote'word"], tmp_path) == 0
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows batch launcher resolution")
-def test_argv_resolves_batch_launcher_on_windows(tmp_path, monkeypatch):
-    launcher = _write(tmp_path, "tool directory/argv-tool.cmd", '@echo off\r\nif "%~1"=="path with spaces" (exit /b 0) else (exit /b 7)\r\n')
-    monkeypatch.setenv("PATH", str(launcher.parent) + ";" + os.environ["PATH"])
-    assert run_shell(["argv-tool", "path with spaces"], tmp_path) == 0
 
 
 def test_custom_shell_command_preserves_redirection(tmp_path):

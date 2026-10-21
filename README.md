@@ -43,14 +43,6 @@ crapper --root /path/to/project --no-coverage \
   --exclude packages --exclude server/_trigger
 ```
 
-In native Windows PowerShell, paths containing spaces are quoted:
-
-```powershell
-crapper --root "C:\work\business project" --no-coverage `
-  --source-root client --source-root common --source-root server `
-  --exclude packages --exclude 'server\_trigger'
-```
-
 `--exclude` may be repeated. Each value is anchored at the project root, even
 when selecting another source root, an explicit file or directory, a path
 filter, or `--changed`. An exact file excludes that file; an exact directory
@@ -72,10 +64,10 @@ directories. Quote globs so the shell passes them unchanged. Use project-relativ
 paths without `..`; sources explicitly selected outside the project root are
 not matched by project-relative exclusions.
 
-These CLI scenarios were tested natively on Windows, including backslash
-exclusions, absolute source roots, and project paths containing spaces. macOS
-uses the same project-relative matching rules with `/` paths and quoted globs;
-macOS execution has not been validated.
+These CLI scenarios were tested with backslash exclusions, absolute source
+roots, and project paths containing spaces. macOS uses the same
+project-relative matching rules with `/` paths and quoted globs; macOS
+execution has not been validated.
 
 ## Complete business-tree refresh
 
@@ -122,8 +114,7 @@ retain exit code 2.
 
 Complete-tree selection, fresh standard Lua reporter coverage across client,
 common, and server roots, deletion, empty refreshes, and filesystem failure
-scenarios were tested through the native Windows CLI with project paths
-containing spaces, including a destination held open without delete sharing.
+scenarios were tested through the CLI with project paths containing spaces.
 On macOS this assumes the destination filesystem supports atomic replacement
 of a sibling file and the process can create and replace files in `.metrics`;
 macOS execution has not been validated.
@@ -196,29 +187,18 @@ Custom commands use a bounded ownership convention: **`coverage/lcov.info` is th
 
 Built-in Lua enumerates every module's existing `target/coverage/lua[/<module-slug>]/lcov.info` and sibling `luacov.stats.out`, removes all of them before any runner executes, then requires fresh stats and valid LCOV for every module. Cleanup removes files individually and preserves unrelated siblings. Colliding module slugs fail before execution. The standard `luacov-reporter-lcov` reporter handles conversion, with `includeuntestedfiles` set to the selected Lua files for each module so untested selected sources retain zero-hit records without recursively scanning unrelated directories.
 
-Fresh custom and Lua LCOV must contain at least one completed `SF` record, positive unique `DA` line numbers with nonnegative hit counts, and exactly one consistent `LF`/`LH` count per source. Optional DA MD5 checksums and standard function/branch metadata are accepted; counts may appear in either order. A completed `LF:0`/`LH:0` record is valid. Empty, incomplete, unreadable, duplicate-source, or malformed output fails with exit **1** before publication. Every `SF` must resolve to a readable regular file: relative custom paths resolve against `--root`, relative built-in Lua paths against that module's Busted working directory. Absolute native paths and forward or backward separators work; source paths are never guessed from the report directory or suffix searches. Custom commands that change directories must emit absolute or project-relative source paths. Built-in Lua coverage uses canonical paths and ignores alternate stale Lua reports even in mixed-language projects.
+Fresh custom and Lua LCOV must contain at least one completed `SF` record, positive unique `DA` line numbers with nonnegative hit counts, and exactly one consistent `LF`/`LH` count per source. Optional DA MD5 checksums and standard function/branch metadata are accepted; counts may appear in either order. A completed `LF:0`/`LH:0` record is valid. Empty, incomplete, unreadable, duplicate-source, or malformed output fails with exit **1** before publication. Every `SF` must resolve to a readable regular file: relative custom paths resolve against `--root`, relative built-in Lua paths against that module's Busted working directory. Absolute paths and forward or backward separators work; source paths are never guessed from the report directory or suffix searches. Custom commands that change directories must emit absolute or project-relative source paths. Built-in Lua coverage uses canonical paths and ignores alternate stale Lua reports even in mixed-language projects.
 
-Custom command strings retain shell syntax and run from `--root`. Quote arguments for the platform shell (`cmd.exe` on native Windows, `/bin/sh` on POSIX); paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected native interpreter. Native Windows command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
+Custom command strings retain shell syntax and run from `--root` through `/bin/sh`. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
 
 A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their existing warning-and-N/A behavior.
 
 On macOS, execution assumes Python 3.11+, a Lua 5.4 interpreter on PATH, and Busted, LuaCov, cluacov 1.0.0, and `luacov-reporter-lcov` installed for that interpreter. Custom commands use the POSIX shell and built-in Lua uses native argument-vector execution. These macOS assumptions have not been runtime-validated.
 
-## Windows
+## WSL2
 
-crapper supports native Windows. Install Python 3.11 or later, then run these commands in PowerShell from the crapper checkout:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e '.[dev]'
-.\.venv\Scripts\crapper.exe --root "C:\path\to\project"
-```
-
-Install the coverage tools for the languages in your project separately. Lua coverage needs Lua 5.4, busted, luacov, cluacov 1.0.0 (`luarocks --lua-version=5.4 install cluacov 1.0.0-1`), and luacov-reporter-lcov. Snapshots recorded without cluacov change once on the first refresh with it. Put `lua5.4` or `lua` on PATH. crapper resolves Windows Lua wrappers to the native interpreter and runs the coverage modules directly, so interpreter, project, and configuration paths can contain spaces.
-
-The full test suite and Lua coverage with paths containing spaces were validated on Windows 11 with Python 3.12 and Lua 5.4.6. This does not verify every language's external coverage toolchain. Built-in commands use argument vectors; custom `--coverage-command` strings use the Windows shell.
-
-WSL2 with Ubuntu is also an installation option:
+Native Windows is not supported: crapper exits with status 1 and points at
+this section. Run it inside WSL2 with Ubuntu.
 
 1. In an administrator PowerShell, run `wsl --install` and reboot.
 2. Open Ubuntu and clone into the Linux home directory, not `/mnt/c`.
@@ -237,16 +217,7 @@ Under WSL2, crapper warns when the project is under `/mnt/`.
 
 ## Development
 
-On Windows, prepare and verify an environment for the current checkout:
-
-```powershell
-.\scripts\setup-dev.ps1
-.\.venv\Scripts\python.exe -m pytest
-```
-
-Pass `-Python "C:\path\to\python.exe"` to select the interpreter used to create `.venv`. The setup installs `.[dev]` and verifies the parser dependencies and checkout imports. Run it in each worktree, and give agents the verified interpreter's absolute path.
-
-On Linux or macOS:
+Prepare and verify an environment for the current checkout:
 
 ```bash
 python3 -m venv .venv

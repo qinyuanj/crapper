@@ -33,9 +33,6 @@ def cli(root, *args, env=None):
 
 
 def shell_command(argv):
-    # list2cmdline quotes for CreateProcess, not cmd.exe metacharacters.
-    if os.name == "nt":
-        return " ".join('"' + arg + '"' for arg in argv)
     return shlex.join(argv)
 
 
@@ -290,14 +287,8 @@ def test_custom_report_native_case_equivalence(tmp_path, duplicate):
                    "p = Path('coverage/lcov.info'); p.parent.mkdir(exist_ok=True)\n"
                    f"p.write_text({record!r})\n")
     result = cli(project, "--coverage-command", shell_command([sys.executable, str(script)]))
-    if os.name == "nt" and not duplicate:
-        assert result.returncode == 0, result.stderr
-        assert ":coverage 100.0" in (project / ".metrics/crap.edn").read_text()
-    else:
-        assert result.returncode == 1, result.stderr
-        assert (project / ".metrics/crap.edn").read_bytes() == previous
-        if os.name == "nt":
-            assert "duplicate LCOV source" in result.stderr
+    assert result.returncode == 1, result.stderr
+    assert (project / ".metrics/crap.edn").read_bytes() == previous
 
 
 @pytest.mark.skipif(lua_interpreter() is None, reason="Lua 5.4 is not installed")
@@ -320,14 +311,8 @@ def test_builtin_lua_report_native_case_equivalence(tmp_path, duplicate):
           f"f:write({literal}); f:close() end}}\n")
     previous = write(project, ".metrics/crap.edn", "previous snapshot\n").read_bytes()
     result = cli(project)
-    if os.name == "nt" and not duplicate:
-        assert result.returncode == 0, result.stderr
-        assert ":coverage 100.0" in (project / ".metrics/crap.edn").read_text()
-    else:
-        assert result.returncode == 1, result.stderr
-        assert (project / ".metrics/crap.edn").read_bytes() == previous
-        if os.name == "nt":
-            assert "duplicate LCOV source" in result.stderr
+    assert result.returncode == 1, result.stderr
+    assert (project / ".metrics/crap.edn").read_bytes() == previous
 
 
 @pytest.mark.parametrize("outcome", ["failed", "missing", "malformed", "valid"])

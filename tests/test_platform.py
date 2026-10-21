@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from crapper.cli import platform_warning
+from crapper.cli import UNSUPPORTED_PLATFORM, platform_warning
 
 
-def test_native_windows_is_quiet():
-    assert platform_warning("win32", Path("C:/proj")) is None
+def test_native_windows_is_refused():
+    assert platform_warning("win32", Path("C:/proj")) == UNSUPPORTED_PLATFORM
 
 
 def test_windows_drive_under_wsl_suggests_the_linux_filesystem():

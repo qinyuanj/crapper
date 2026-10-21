@@ -57,8 +57,8 @@ def write_metrics(entries: list[Entry], root: Path) -> Path:
     """Replace the snapshot atomically, or propagate failure without changing it.
 
     Render and encode before staging beside the destination. Closing the staged
-    file before replacement also permits native Windows publication. An empty
-    tree publishes an empty entries map, removing all previous metrics.
+    file before replacement keeps the swap atomic. An empty tree publishes an
+    empty entries map, removing all previous metrics.
     """
     payload = render_edn(entries).encode("utf-8")
     path = metrics_path(root)

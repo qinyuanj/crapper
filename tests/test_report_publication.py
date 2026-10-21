@@ -132,34 +132,3 @@ def test_empty_tree_publication_removes_all_previous_entries(tmp_path):
     assert metrics.write_metrics([], tmp_path) == destination
     assert destination.read_bytes() == b"{:entries []}\n"
     assert list(destination.parent.iterdir()) == [destination]
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows file sharing semantics")
-def test_windows_locked_destination_preserves_bytes_and_cleans_staging(tmp_path):
-    import ctypes
-    from ctypes import wintypes
-
-    root = tmp_path / "project with spaces"
-    destination = root / ".metrics" / "crap.edn"
-    destination.parent.mkdir(parents=True)
-    original = b"previous Windows snapshot\r\n"
-    destination.write_bytes(original)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
-    ]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    # Allow readers, but deny deletion/replacement while this handle is open.
-    handle = kernel32.CreateFileW(str(destination), 0x80000000, 1, None, 3, 0x80, None)
-    if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        with pytest.raises(PermissionError):
-            metrics.write_metrics([], root)
-        assert destination.read_bytes() == original
-        assert list(destination.parent.iterdir()) == [destination]
-    finally:
-        kernel32.CloseHandle(handle)

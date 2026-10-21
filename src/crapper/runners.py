@@ -37,11 +37,6 @@ def run_shell(command: str | list[str], cwd: Path) -> int:
     """Run built-in argv without a shell; custom command strings use a shell."""
     display = command if isinstance(command, str) else shlex.join(command)
     _warn(f"+ ({cwd}) {display}")
-    if os.name == "nt" and isinstance(command, list) and command:
-        # CreateProcess does not search PATHEXT; LuaRocks supplies .bat launchers.
-        # Windows can launch a resolved batch path, though its own cmd parsing
-        # still applies. Keep shell=False and do not promise arbitrary batch argv.
-        command = [shutil.which(command[0]) or command[0], *command[1:]]
     try:
         completed = subprocess.run(command, cwd=cwd, shell=isinstance(command, str))
     except OSError as exc:
@@ -534,21 +529,6 @@ def lua_interpreter() -> str | None:
     for name in ("lua5.4", "lua"):
         binary = shutil.which(name)
         if binary and _lua_version(binary) == _LUA_VERSION:
-            if Path(binary).suffix.lower() in (".bat", ".cmd"):
-                # Lua's arg[0] identifies the executable behind a PATH wrapper.
-                # Never send the coverage/config argv back through that wrapper.
-                try:
-                    probe = subprocess.run(
-                        [binary, "-e", "io.write(arg[0])"], capture_output=True, text=True
-                    )
-                except OSError:
-                    continue
-                native = probe.stdout.strip()
-                if not Path(native).is_file() or Path(native).suffix.lower() != ".exe":
-                    continue
-                if _lua_version(native) != _LUA_VERSION:
-                    continue
-                binary = native
             return str(Path(binary).resolve())
     return None
 
@@ -578,32 +558,10 @@ def lua_coverage_config(
     )
 
 
-def _lua_package_setup(lua: str) -> str:
-    # A LuaRocks/PATH wrapper may set module paths that the native executable
-    # does not inherit. Probe only fixed code, then carry those paths as Lua
-    # string literals in the native bootstrap, never shell arguments.
-    for name in ("lua5.4", "lua"):
-        wrapper = shutil.which(name)
-        if not wrapper or Path(wrapper).suffix.lower() not in (".bat", ".cmd"):
-            continue
-        try:
-            probe = subprocess.run(
-                [wrapper, "-e", "io.write(arg[0],string.char(10),package.path,string.char(10),package.cpath)"],
-                capture_output=True, text=True,
-            )
-        except OSError:
-            continue
-        lines = probe.stdout.splitlines()
-        if probe.returncode == 0 and len(lines) == 3 and Path(lines[0]).resolve() == Path(lua).resolve():
-            return (f"package.path = {json.dumps(lines[1], ensure_ascii=False)}; "
-                    f"package.cpath = {json.dumps(lines[2], ensure_ascii=False)}; ")
-    return ""
-
-
 def lua_cluacov_version(lua: str) -> str:
     """The cluacov version the interpreter loads, or "" when it cannot load one."""
 
-    loader = _lua_package_setup(lua) + "pcall(require, 'luarocks.loader'); "
+    loader = "pcall(require, 'luarocks.loader'); "
     try:
         completed = subprocess.run(
             [lua, "-e", loader + "local ok, v = pcall(require, 'cluacov.version'); "
@@ -627,9 +585,8 @@ def require_lua_cluacov(lua: str) -> None:
 
 def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]:
     # Run both tools in the selected interpreter. Busted's --lua re-execution
-    # joins arguments into a shell string; LuaRocks BAT launchers add another
-    # shell boundary. Module entrypoints avoid both on Windows and POSIX.
-    loader = _lua_package_setup(lua) + "pcall(require, 'luarocks.loader'); "
+    # joins arguments into a shell string, so module entrypoints avoid it.
+    loader = "pcall(require, 'luarocks.loader'); "
     # Busted exits on failure but returns on success in non-standalone mode.
     # Stop Lua before it treats the argv placeholder "busted" as a script.
     run = [lua, "-e", loader + "require('busted.runner')({standalone = false}); os.exit(0)",
@@ -639,9 +596,8 @@ def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]
             # LuaCov retains slash variants as different keys, including zero-hit
             # selected files, and cluacov's hook keeps the `./` that LuaCov's own
             # hook strips. Normalize before the reporter merges those keys.
-            "local real_name = r.real_name; local windows = package.config:sub(1, 1) == string.char(92); "
+            "local real_name = r.real_name; "
             "r.real_name = function(name) name = real_name(name); "
-            "if windows then name = name:gsub(string.char(92), '/') end; "
             "return (name:gsub('^%./', '')) end; "
             "c.reporter = 'lcov'; r.run_report(c); os.exit(0)",
             "--", "luacov", str(config)]

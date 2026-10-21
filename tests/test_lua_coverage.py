@@ -196,14 +196,11 @@ def _toolchain_ready() -> bool:
 @pytest.mark.skipif(not _toolchain_ready(), reason="busted, luacov, and Lua 5.4 are not installed")
 def test_lua_executable_reads_config_paths_with_spaces(tmp_path):
     binary = os.environ.get("CRAPPER_TEST_LUA") or lua_interpreter()
-    if binary is None or Path(binary).suffix.lower() in (".cmd", ".bat"):
+    if binary is None:
         pytest.skip("set CRAPPER_TEST_LUA to a real Lua 5.4 executable to test native argv")
-    # Copy the runtime alongside the executable (Windows Lua may need its DLL).
     runtime = tmp_path / "lua runtime with spaces"
     runtime.mkdir()
     shutil.copy2(binary, runtime)
-    for dll in Path(binary).parent.glob("*.dll"):
-        shutil.copy2(dll, runtime)
     executable = runtime / Path(binary).name
     config = _write(tmp_path, "config directory/luacov.cfg.lua",
                     lua_coverage_config(tmp_path / "stats file", tmp_path / "report file"))
@@ -251,8 +248,6 @@ def test_fixture_project_end_to_end(tmp_path, monkeypatch, runtime_with_spaces):
         runtime = tmp_path / "lua runtime with spaces"
         runtime.mkdir()
         shutil.copy2(binary, runtime)
-        for dll in binary.parent.glob("*.dll"):
-            shutil.copy2(dll, runtime)
         executable = str(runtime / binary.name)
         monkeypatch.setattr("crapper.runners.lua_interpreter", lambda: executable)
     project = tmp_path / "lua project with spaces"
