@@ -4,9 +4,10 @@ Decision points are `if` / `if let`, `for`, `while` / `while let`, `loop`,
 each `match` arm, `?`, and `&&` / `||`. Free functions are namespaced by the
 module path (`crate::foo::bar`). Methods are namespaced by the self type
 (`crate::foo::Widget`) so uml-viewer can join them to that type. Test code is
-not scored: bodies inside a `tests` module (inline or a `tests.rs` file), a
-`#![cfg(test)]` file, and any item marked `#[test]` or `#[cfg(test)]`, alone or
-inside the item that carries it.
+not scored: anything inside a `tests` module (inline or a `tests.rs` file), a
+file or module that opens with `#![cfg(test)]`, or an item marked `#[test]`,
+`#[bench]`, `#[<runner>::test]`, or a `cfg` that holds only under `test`
+(`cfg(test)`, `cfg(all(test, ...))`; not `cfg(any(test, ...))`).
 """
 
 import re
@@ -35,7 +36,6 @@ _DECISIONS = {
 }
 _PACKAGE_BLOCK = re.compile(r"(?ms)^\[package\](.*?)(?:^\[|\Z)")
 _NAME = re.compile(r'(?m)^name\s*=\s*"([^"]+)"')
-_TEST_WORD = re.compile(r"\btest\b")
 
 
 def _is_decision(node) -> bool:
@@ -63,17 +63,46 @@ def _ancestor_mods(data: bytes, node) -> list[str]:
     return names
 
 
-def _in_mod_named(data: bytes, node, name: str) -> bool:
-    return name in _ancestor_mods(data, node)
+def _cfg_items(tree) -> list[list]:
+    """The comma-separated predicates inside a cfg `token_tree`."""
+
+    items: list[list] = [[]]
+    for child in tree.children[1:-1]:
+        if child.type == ",":
+            items.append([])
+        else:
+            items[-1].append(child)
+    return [item for item in items if item]
 
 
-def _test_attribute(text: str) -> bool:
-    compact = "".join(text.split())
-    if compact in {"#[test]", "#![test]"}:
-        return True
-    if not compact.startswith(("#[cfg(", "#![cfg(")) or "not(" in compact:
+def _requires_test(data: bytes, item: list) -> bool:
+    """True when this cfg predicate can only hold in a `cfg(test)` build."""
+
+    name = node_text(data, item[0])
+    if len(item) == 1:
+        return name == "test"
+    if item[1].type != "token_tree":
         return False
-    return _TEST_WORD.search(compact) is not None
+    args = _cfg_items(item[1])
+    if name == "all":
+        return any(_requires_test(data, arg) for arg in args)
+    if name == "any":
+        return bool(args) and all(_requires_test(data, arg) for arg in args)
+    return False
+
+
+def _test_attribute(data: bytes, item) -> bool:
+    attribute = child_of_type(item, "attribute")
+    if attribute is None or not attribute.children:
+        return False
+    path = node_text(data, attribute.children[0])
+    arguments = child_of_type(attribute, "token_tree")
+    if arguments is None:
+        return path.split("::")[-1] in {"test", "bench"}
+    if path != "cfg":
+        return False
+    predicates = _cfg_items(arguments)
+    return len(predicates) == 1 and _requires_test(data, predicates[0])
 
 
 def _marked_test(data: bytes, node) -> bool:
@@ -81,28 +110,38 @@ def _marked_test(data: bytes, node) -> bool:
 
     sibling = node.prev_named_sibling
     while sibling is not None and sibling.type in {"attribute_item", "line_comment", "block_comment"}:
-        if sibling.type == "attribute_item" and _test_attribute(node_text(data, sibling)):
+        if sibling.type == "attribute_item" and _test_attribute(data, sibling):
             return True
         sibling = sibling.prev_named_sibling
     return False
 
 
-def _in_test_item(data: bytes, node) -> bool:
+def _inner_test(data: bytes, container) -> bool:
+    return any(
+        child.type == "inner_attribute_item" and _test_attribute(data, child)
+        for child in container.children
+    )
+
+
+def _test_module(data: bytes, node) -> bool:
+    if node.type == "source_file":
+        return _inner_test(data, node)
+    if node.type != "mod_item":
+        return False
+    ident = child_of_type(node, "identifier")
+    if ident is not None and node_text(data, ident) == "tests":
+        return True
+    body = child_of_type(node, "declaration_list")
+    return body is not None and _inner_test(data, body)
+
+
+def _in_test_code(data: bytes, node) -> bool:
     current = node
     while current is not None:
-        if _marked_test(data, current):
+        if _marked_test(data, current) or _test_module(data, current):
             return True
         current = current.parent
     return False
-
-
-def _test_file(data: bytes, root, modules: list[str]) -> bool:
-    if "tests" in modules:
-        return True
-    return any(
-        child.type == "inner_attribute_item" and _test_attribute(node_text(data, child))
-        for child in root.children
-    )
 
 
 def _impl_type(data: bytes, impl) -> str | None:
@@ -199,7 +238,7 @@ def _record_function(data: bytes, node, modules: list[str], path: str) -> Functi
         return None
     if node.parent is not None and node.parent.type == "block":
         return None
-    if _in_mod_named(data, node, "tests") or _in_test_item(data, node):
+    if _in_test_code(data, node):
         return None
     ident = child_of_type(node, "identifier")
     if ident is None:
@@ -223,7 +262,7 @@ def functions_in_source(
     crate_name, crate_root = _crate_name(located)
     modules = _file_modules(located, crate_name, crate_root)
     found: list[Function] = []
-    if _test_file(data, tree.root_node, modules):
+    if "tests" in modules[1:]:
         return found
     for node in descendants(tree.root_node):
         recorded = _record_function(data, node, modules, path)
