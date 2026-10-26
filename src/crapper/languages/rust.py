@@ -3,8 +3,10 @@
 Decision points are `if` / `if let`, `for`, `while` / `while let`, `loop`,
 each `match` arm, `?`, and `&&` / `||`. Free functions are namespaced by the
 module path (`crate::foo::bar`). Methods are namespaced by the self type
-(`crate::foo::Widget`) so uml-viewer can join them to that type. Bodies inside
-`mod tests` are test code and are not scored.
+(`crate::foo::Widget`) so uml-viewer can join them to that type. Test code is
+not scored: bodies inside a `tests` module (inline or a `tests.rs` file), a
+`#![cfg(test)]` file, and any item marked `#[test]` or `#[cfg(test)]`, alone or
+inside the item that carries it.
 """
 
 import re
@@ -33,6 +35,7 @@ _DECISIONS = {
 }
 _PACKAGE_BLOCK = re.compile(r"(?ms)^\[package\](.*?)(?:^\[|\Z)")
 _NAME = re.compile(r'(?m)^name\s*=\s*"([^"]+)"')
+_TEST_WORD = re.compile(r"\btest\b")
 
 
 def _is_decision(node) -> bool:
@@ -62,6 +65,44 @@ def _ancestor_mods(data: bytes, node) -> list[str]:
 
 def _in_mod_named(data: bytes, node, name: str) -> bool:
     return name in _ancestor_mods(data, node)
+
+
+def _test_attribute(text: str) -> bool:
+    compact = "".join(text.split())
+    if compact in {"#[test]", "#![test]"}:
+        return True
+    if not compact.startswith(("#[cfg(", "#![cfg(")) or "not(" in compact:
+        return False
+    return _TEST_WORD.search(compact) is not None
+
+
+def _marked_test(data: bytes, node) -> bool:
+    """True when an outer attribute right before `node` marks it as test code."""
+
+    sibling = node.prev_named_sibling
+    while sibling is not None and sibling.type in {"attribute_item", "line_comment", "block_comment"}:
+        if sibling.type == "attribute_item" and _test_attribute(node_text(data, sibling)):
+            return True
+        sibling = sibling.prev_named_sibling
+    return False
+
+
+def _in_test_item(data: bytes, node) -> bool:
+    current = node
+    while current is not None:
+        if _marked_test(data, current):
+            return True
+        current = current.parent
+    return False
+
+
+def _test_file(data: bytes, root, modules: list[str]) -> bool:
+    if "tests" in modules:
+        return True
+    return any(
+        child.type == "inner_attribute_item" and _test_attribute(node_text(data, child))
+        for child in root.children
+    )
 
 
 def _impl_type(data: bytes, impl) -> str | None:
@@ -158,7 +199,7 @@ def _record_function(data: bytes, node, modules: list[str], path: str) -> Functi
         return None
     if node.parent is not None and node.parent.type == "block":
         return None
-    if _in_mod_named(data, node, "tests"):
+    if _in_mod_named(data, node, "tests") or _in_test_item(data, node):
         return None
     ident = child_of_type(node, "identifier")
     if ident is None:
@@ -182,6 +223,8 @@ def functions_in_source(
     crate_name, crate_root = _crate_name(located)
     modules = _file_modules(located, crate_name, crate_root)
     found: list[Function] = []
+    if _test_file(data, tree.root_node, modules):
+        return found
     for node in descendants(tree.root_node):
         recorded = _record_function(data, node, modules, path)
         if recorded is not None:

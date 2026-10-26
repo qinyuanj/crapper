@@ -93,3 +93,55 @@ def test_nested_module_path(tmp_path):
     assert [(fn.namespace, fn.name, fn.complexity) for fn in functions] == [
         ("demo::game::board", "place", 2)
     ]
+
+
+def _demo(tmp_path):
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "demo"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+
+
+def test_cfg_test_items_are_test_code(tmp_path):
+    _demo(tmp_path)
+    source = """
+pub fn kept() {}
+
+#[cfg(test)]
+pub fn helper() { if true {} }
+
+#[cfg(test)]
+mod policy_shape_tests {
+    fn case() {}
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+impl Host {
+    pub fn fake() {}
+}
+
+impl Host {
+    pub fn real() {}
+    #[cfg(test)]
+    pub fn probe() {}
+    #[test]
+    fn checks() {}
+}
+
+#[cfg(all(test, unix))]
+fn unix_only() {}
+
+#[cfg(not(test))]
+fn shipped() {}
+"""
+    functions = functions_in_source(source, str(tmp_path / "src" / "lib.rs"), str(tmp_path))
+    assert [fn.name for fn in functions] == ["kept", "real", "shipped"]
+
+
+def test_a_tests_file_module_is_test_code(tmp_path):
+    _demo(tmp_path)
+    path = tmp_path / "src" / "compose" / "tests.rs"
+    assert functions_in_source("fn case() {}\n", str(path), str(tmp_path)) == []
+    inner = "#![cfg(test)]\nfn case() {}\n"
+    assert functions_in_source(inner, str(tmp_path / "src" / "support.rs"), str(tmp_path)) == []
