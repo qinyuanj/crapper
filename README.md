@@ -210,7 +210,8 @@ this section. Run it inside WSL2 with Ubuntu.
    ```
 
 3. Run `crapper/scripts/setup-ubuntu.sh`. It installs Python, Lua 5.4,
-   busted, luacov, cluacov 1.0.0, and luacov-reporter-lcov, then creates `.venv`.
+   busted, luacov, cluacov 1.0.0, luacov-reporter-lcov, and Babashka, then
+   creates `.venv`.
 4. Edit in VS Code with the WSL extension (`code .` from Ubuntu).
 
 Under WSL2, crapper warns when the project is under `/mnt/`.
