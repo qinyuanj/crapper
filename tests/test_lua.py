@@ -200,3 +200,10 @@ def test_explicit_lua_sources_override_tooling_pruning(
     assert [path.relative_to(root).as_posix() for path in files] == expected_files
     assert len(analyze_files(files, root, None)) == expected_entries
     assert run(argv) == 0
+
+
+def test_a_source_that_does_not_parse_is_refused_not_measured():
+    # tree-sitter recovers from a syntax error and still yields functions,
+    # so a broken file would publish CRAP for code that cannot run.
+    with pytest.raises(ValueError, match="broken.lua"):
+        functions_in_source("function M.choose(x\n  return x\nend\n", "src/broken.lua")

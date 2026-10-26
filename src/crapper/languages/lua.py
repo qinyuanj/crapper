@@ -144,6 +144,8 @@ def functions_in_source(
     source: str, path: str, project_root: str | None = None
 ) -> list[Function]:
     data, tree = parse(source, "lua")
+    if tree.root_node.has_error:
+        raise ValueError(f"Lua source does not parse: {path}")
     namespace = _module_namespace(path, project_root)
     captures = QueryCursor(_query()).captures(tree.root_node)
     # A binary expression holds one operator, so no decision is captured twice.
