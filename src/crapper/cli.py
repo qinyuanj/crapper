@@ -18,7 +18,7 @@ from crapper.discover import (
     language_of,
     under_roots,
 )
-from crapper.metrics import write_metrics
+from crapper.metrics import metrics_path, write_metrics
 from crapper.report import format_report
 from crapper.runners import CoverageError, run_coverage
 
@@ -47,7 +47,9 @@ Options:
                                 An absolute pattern or one with .. is an error.
   --full-tree                   Replace the complete configured business tree.
                                 Rejects --changed, positionals and existing coverage.
-                                --no-coverage publishes complexity only.
+                                Any language's coverage failure keeps the previous
+                                snapshot and exits 1. --no-coverage publishes
+                                complexity only.
   --changed                     Analyze source files git reports as added,
                                 modified, renamed, or untracked under the
                                 project root, outside the skipped directories.
@@ -74,7 +76,7 @@ as are *_test.go, *.spec.ts, test_*.py, *_test.py, and *_spec.lua files.
 
 Exit status: 0 when the analysis completed, 2 when --threshold was exceeded
 after the snapshot was written, 1 for a usage error, failed Lua or custom
-coverage, or a snapshot that could not be written.
+coverage, failed --full-tree coverage, or a snapshot that could not be written.
 
 Coverage, when it is produced:
   Clojure      clj -M:cov --lcov, then Cloverage form counts or LCOV
@@ -84,6 +86,12 @@ Coverage, when it is produced:
   Rust         cargo llvm-cov, or cargo tarpaulin, in the nearest Cargo.toml
   Python       coverage.py LCOV, via pytest or unittest, per project
   Lua          busted -c with luacov, then luacov -r lcov, per .busted or rockspec
+Languages whose coverage succeeded are stamped in
+target/coverage/crapper-stamp.json, so mutator can reuse the reports until
+any file outside the skipped directories and tool caches (.pytest_cache,
+.cpcache, .coverage, ...) changes. A file edited while coverage runs leaves
+that run unstamped. A coverage script is judged by its exit status; the other
+coverage commands fail when they write no report.
 
 uml-viewer joins .metrics/crap.edn on :namespace and :name.
   Clojure      the ns, and the defn name
@@ -333,9 +341,11 @@ def run(argv: list[str] | None = None) -> int:
     if not options.no_coverage and (files or options.coverage_command):
         if not options.use_existing_coverage:
             try:
-                bundle = run_coverage(root, files, options.coverage_command, options.lua_shards)
+                bundle = run_coverage(
+                    root, files, options.coverage_command, options.lua_shards, options.full_tree
+                )
             except CoverageError as exc:
-                print(f"Coverage failed: {exc}", file=sys.stderr)
+                print(f"Coverage failed: {exc} {metrics_path(root)} was not replaced.", file=sys.stderr)
                 return 1
         if bundle is None:
             bundle = load_bundle(root)

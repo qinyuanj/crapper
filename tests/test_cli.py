@@ -7,6 +7,7 @@ import pytest
 
 from crapper.cli import HELP, _positionals, _take, main, parse_args, run, select_files
 from crapper.discover import language_of
+from crapper.runners import CoverageError
 
 
 def test_language_detection():
@@ -546,6 +547,34 @@ def test_full_tree_publishes_every_class_under_the_roots_minus_exclusions(tmp_pa
     assert run(["--root", str(tmp_path), "--full-tree", "--exclude", "lib/gen"]) == 0
     assert _names(tmp_path) == ["keep", "made", "util"]
     assert [path.name for path in calls[0][1]] == ["util.clj", "made.clj", "keep.clj"]
+
+
+def test_full_tree_coverage_failure_keeps_the_previous_snapshot(tmp_path, monkeypatch, capsys):
+    _tree(tmp_path)
+    previous = tmp_path / ".metrics" / "crap.edn"
+    previous.parent.mkdir()
+    previous.write_text("{:entries []}\n", encoding="utf-8")
+    def failing(*args):
+        assert args[-1] is True  # --full-tree asks for a strict run
+        raise CoverageError("No usable coverage for clojure, python.")
+
+    monkeypatch.setattr("crapper.cli.run_coverage", failing)
+    assert run(["--root", str(tmp_path), "--full-tree"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        f"Coverage failed: No usable coverage for clojure, python. {previous} was not replaced.\n"
+    )
+    assert previous.read_text(encoding="utf-8") == "{:entries []}\n"
+
+
+def test_failed_coverage_outside_full_tree_still_publishes(tmp_path, monkeypatch):
+    _tree(tmp_path)
+    stricts = []
+    monkeypatch.setattr("crapper.cli.run_coverage", lambda *args: stricts.append(args[-1]))
+    assert run(["--root", str(tmp_path)]) == 0
+    assert stricts == [False]
+    assert _names(tmp_path) == ["deep", "keep", "made", "util"]
 
 
 def test_full_tree_without_coverage_publishes_and_honours_the_threshold(tmp_path, monkeypatch):

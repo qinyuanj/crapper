@@ -104,11 +104,15 @@ crapper --root /path/to/project --full-tree --no-coverage \
 `--use-existing-coverage`. These options retain their existing selection behavior
 when `--full-tree` is absent. `--no-coverage` explicitly selects a complete
 complexity snapshot; it does not claim a fresh covered quality refresh.
+With coverage, every language must succeed: when any built-in runner fails or
+writes no report, crapper names the languages, leaves the previous
+`.metrics/crap.edn` in place, and exits 1.
+
 | Exit | Meaning |
 | --- | --- |
 | 0 | analysis completed and the snapshot was written |
 | 2 | `--threshold` was exceeded, after the snapshot was written |
-| 1 | usage error, failed Lua or custom coverage, or the snapshot could not be written |
+| 1 | usage error, failed Lua or custom coverage, failed `--full-tree` coverage, or the snapshot could not be written |
 
 Deleting sources removes their entries on the next complete refresh. Deleting
 the final source atomically replaces the previous snapshot with `{:entries []}`.
@@ -196,7 +200,19 @@ By default a run deletes the previous report for each language it is about to me
 | Python | `coverage run` with pytest or unittest, then `coverage lcov` | `target/coverage/python/lcov.info` |
 | Lua | Lua 5.4 runs the Busted and LuaCov entrypoint modules with coverage and the LCOV reporter | `target/coverage/lua/lcov.info` |
 
-For languages other than Lua, a missing tool or a failed test run leaves that language at N/A and still writes the snapshot. Pass `--coverage-command` to replace those defaults with one command of your own.
+For languages other than Lua, a missing tool, a failed test run, or a command that writes no report leaves that language at N/A and still writes the snapshot, except under `--full-tree`, which keeps the previous snapshot and exits 1. A `coverage` script is judged by its exit status alone, since it picks its own report location. Pass `--coverage-command` to replace those defaults with one command of your own.
+
+### Reusing coverage
+
+After generating coverage, crapper records `target/coverage/crapper-stamp.json`:
+
+```json
+{"version": 1, "command": null,
+ "languages": {"python": "<sha256>"},
+ "files": {"python": ["src/app.py"]}}
+```
+
+A language is listed only when its coverage succeeded in that run; a custom `--coverage-command` stands or falls for every language it was given. The fingerprint is a sha256 over the relative path, size, and modification time of every file in the project, skipping the same directories as the walk (`target`, `.venv`, `node_modules`, ...) but not the test directories, since tests change coverage. Caches the tools write as they run are skipped too: `.pytest_cache`, `.hypothesis`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.nox`, `.cpcache`, `.nyc_output`, `htmlcov`, and `.coverage` / `.coverage.*` files. The fingerprint is taken before and after the coverage commands; when a file changed while they ran, nothing from that run is stamped, because the reports may describe the old content. `files` lists the source files that run covered. `crapper.runners.stale_files(root, files, coverage_command)` returns the files whose reports cannot be trusted: no stamp, a different `--coverage-command`, a changed tree, or a file outside the covered set. mutator can use it to skip regenerating coverage crapper has just produced.
 
 ## Coverage failure gate
 
@@ -212,7 +228,7 @@ Fresh custom and Lua LCOV must contain at least one completed `SF` record, posit
 
 Custom command strings retain shell syntax and run from `--root` through `/bin/sh`. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
 
-A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their existing warning-and-N/A behavior.
+A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their warning-and-N/A behavior, except under `--full-tree`.
 
 ## WSL2
 

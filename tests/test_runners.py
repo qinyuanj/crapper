@@ -13,10 +13,14 @@ from crapper.runners import (
     _coverage_report,
     _ensure_python_module,
     _ensure_vitest_coverage,
+    _lua_version,
     _manifest_snapshot,
+    _modules_with,
+    _needs_vitest_provider,
     _prepare_report,
     _python_executable,
     _python_kind,
+    _record_lua_lcov,
     _record_python_lcov,
     _restore_manifests,
     _rust_kind,
@@ -89,6 +93,16 @@ def test_rust_module_is_the_nearest_cargo_package(tmp_path):
     lib = _write(tmp_path, "src-tauri/src/lib.rs", "pub fn read_text() {}\n")
     assert rust_modules(tmp_path, [lib]) == [(tmp_path / "src-tauri").resolve()]
 
+
+def test_java_and_go_modules_keep_the_path_under_the_project_root(tmp_path):
+    _write(tmp_path, "real/pom.xml", "<project/>\n")
+    source = _write(tmp_path, "real/src/A.java", "class A {}\n")
+    (tmp_path / "linked").symlink_to(tmp_path / "real")
+    linked = tmp_path / "linked" / "src" / "A.java"
+    assert _modules_with([linked, source], "java", "pom.xml", tmp_path) == [
+        tmp_path / "linked",
+        tmp_path / "real",
+    ]
 
 def test_manifests_are_restored_after_a_coverage_install(tmp_path):
     package_json = tmp_path / "package.json"
@@ -390,16 +404,17 @@ def test_missing_python_module_is_installed(tmp_path, monkeypatch):
 def test_python_lcov_warnings(tmp_path, monkeypatch, capsys):
     data = tmp_path / ".coverage"
     monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 1)
-    _record_python_lcov(tmp_path, 1, data, "lcov")
+    assert _record_python_lcov(tmp_path, 1, data, "lcov") is False
     assert "Python coverage exited 1" in capsys.readouterr().err
-    _record_python_lcov(tmp_path, 0, data, "lcov")
+    assert _record_python_lcov(tmp_path, 0, data, "lcov") is False
     assert capsys.readouterr().err == ""
     data.write_text("x", encoding="utf-8")
-    _record_python_lcov(tmp_path, 0, data, "lcov")
+    assert _record_python_lcov(tmp_path, 0, data, "lcov") is False
     assert "coverage lcov exited 1" in capsys.readouterr().err
     monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 0)
-    _record_python_lcov(tmp_path, 7, data, "lcov")
+    assert _record_python_lcov(tmp_path, 7, data, "lcov") is False
     assert "Coverage was still recorded" in capsys.readouterr().err
+    assert _record_python_lcov(tmp_path, 0, data, "lcov") is True
 
 
 def test_custom_coverage_command_failure_stops_execution(tmp_path):
@@ -419,7 +434,9 @@ def test_rust_kind_none_skips_rust_coverage(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 0)
     source = _write(tmp_path, "src/lib.rs", "pub fn open() {}\n")
     _write(tmp_path, "Cargo.toml", '[package]\nname = "demo"\nversion = "0.1.0"\n')
-    run_coverage(tmp_path, [source], None)
+    assert run_coverage(tmp_path, [source], None) is None
+    with pytest.raises(CoverageError, match="No usable coverage for rust"):
+        run_coverage(tmp_path, [source], None, strict=True)
     assert "cargo" not in capsys.readouterr().err
 
 
@@ -465,3 +482,163 @@ def test_python_without_coverage_is_na_without_an_install(tmp_path, monkeypatch,
     assert run_coverage(tmp_path, [source], None) is None
     assert ran == [["python3", "-c", "import coverage"]]
     assert "coverage is missing" in capsys.readouterr().err
+
+
+def _recording_shell(monkeypatch, codes=None):
+    calls: list[tuple[list[str], Path]] = []
+
+    def shell(command, cwd):
+        calls.append((command, Path(cwd)))
+        return (codes or {}).get(command[0], 0)
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    return calls
+
+
+def test_vitest_provider_install_must_leave_the_provider_on_disk(tmp_path, monkeypatch):
+    provider = tmp_path / "node_modules" / "@vitest" / "coverage-v8"
+
+    def install(_command, _cwd):
+        provider.mkdir(parents=True)
+        return 0
+
+    monkeypatch.setattr("crapper.runners.run_shell", install)
+    assert _ensure_vitest_coverage(tmp_path) is True
+    provider.rmdir()
+    monkeypatch.setattr("crapper.runners.run_shell", lambda _command, _cwd: 0)
+    assert _ensure_vitest_coverage(tmp_path) is False
+
+
+def test_rustup_failure_is_reported_and_llvm_cov_must_land_on_path(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "crapper.runners.shutil.which", lambda name: "/bin/rustup" if name == "rustup" else None
+    )
+    _recording_shell(monkeypatch, {"rustup": 1})
+    assert _rust_kind() is None
+    assert "rustup component add llvm-tools-preview failed." in capsys.readouterr().err
+    _recording_shell(monkeypatch)
+    assert _rust_kind() is None
+    assert "failed" not in capsys.readouterr().err
+
+
+def test_python_root_is_the_nearest_project_marker(tmp_path):
+    _write(tmp_path, "tools/setup.cfg", "")
+    nested = _write(tmp_path, "tools/lib/run.py", "def run():\n    return 1\n")
+    loose = _write(tmp_path, "scripts/x.py", "def x():\n    return 1\n")
+    assert python_roots(tmp_path, [nested, loose]) == [tmp_path.resolve(), (tmp_path / "tools").resolve()]
+
+
+def test_each_build_tool_runs_only_for_its_own_files(tmp_path, monkeypatch):
+    calls = _recording_shell(monkeypatch)
+    _write(tmp_path, "api/pom.xml", "<project/>\n")
+    java = _write(tmp_path, "api/src/App.java", "class App {}\n")
+    _write(tmp_path, "svc/go.mod", "module example.com/svc\n")
+    _write(tmp_path, "svc/pom.xml", "<project/>\n")
+    go = _write(tmp_path, "svc/main.go", "package main\n")
+    run_coverage(tmp_path, [java, go], None)
+    assert [cwd for command, cwd in calls if command[0] == "mvn"] == [(tmp_path / "api").resolve()]
+    assert [cwd for command, cwd in calls if command[0] == "go"] == [(tmp_path / "svc").resolve()]
+
+
+def test_clojure_retries_without_lcov_and_reports_a_second_failure(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "deps.edn", "{}\n")
+    source = _write(tmp_path, "src/demo/core.clj", "(ns demo.core)\n(defn x [] 1)\n")
+    codes = {"clj -M:cov --lcov": 1, "clj -M:cov": 0}
+    calls = []
+
+    def shell(command, _cwd):
+        calls.append(" ".join(command))
+        return codes[calls[-1]]
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    run_coverage(tmp_path, [source], None)
+    assert calls == ["clj -M:cov --lcov", "clj -M:cov"]
+    assert "Clojure coverage exited" not in capsys.readouterr().err
+    codes["clj -M:cov"] = 2
+    run_coverage(tmp_path, [source], None)
+    assert "Clojure coverage exited 2." in capsys.readouterr().err
+    calls.clear()
+    codes["clj -M:cov --lcov"] = 0
+    run_coverage(tmp_path, [source], None)
+    assert calls == ["clj -M:cov --lcov"]
+    assert capsys.readouterr().err == ""
+
+
+def _build_failures(tmp_path, monkeypatch, capsys, files, tool, message):
+    """Run twice in a fresh tree: once failing with exit 1, once passing."""
+
+    _recording_shell(monkeypatch, {tool: 1})
+    run_coverage(tmp_path, files, None)
+    assert message in capsys.readouterr().err
+    _recording_shell(monkeypatch)
+    run_coverage(tmp_path, files, None)
+    assert message.split(" exited")[0] + " exited" not in capsys.readouterr().err
+
+
+def test_java_failure_is_reported(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "pom.xml", "<project/>\n")
+    files = [_write(tmp_path, "src/App.java", "class App {}\n")]
+    _build_failures(tmp_path, monkeypatch, capsys, files, "mvn", "Java coverage exited 1 in")
+
+
+def test_go_profile_directory_is_created_and_a_failure_is_reported(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "go.mod", "module example.com/demo\n")
+    files = [_write(tmp_path, "main.go", "package main\n")]
+    _build_failures(tmp_path, monkeypatch, capsys, files, "go", "Go coverage exited 1 in")
+    assert (tmp_path / "target" / "coverage" / "go").is_dir()
+
+
+def test_c8_coverage_failure_is_reported_without_a_vitest_install(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "package.json", json.dumps({"scripts": {"test": "node --test"}}))
+    files = [_write(tmp_path, "src/app.ts", "export const n = 1\n")]
+    _build_failures(tmp_path, monkeypatch, capsys, files, "npx", "TypeScript coverage exited 1 in")
+    assert (tmp_path / "target" / "coverage" / "typescript").is_dir()
+    calls = _recording_shell(monkeypatch)
+    run_coverage(tmp_path, files, None)
+    assert [command[0] for command, _cwd in calls] == ["npx"]
+
+
+def test_rust_report_directory_is_created_and_a_failure_is_reported(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("crapper.runners._rust_kind", lambda: "llvm-cov")
+    _write(tmp_path, "Cargo.toml", '[package]\nname = "demo"\nversion = "0.1.0"\n')
+    files = [_write(tmp_path, "src/lib.rs", "pub fn open() {}\n")]
+    _build_failures(tmp_path, monkeypatch, capsys, files, "cargo", "Rust coverage exited 1 in")
+    assert (tmp_path / "target" / "coverage" / "rust").is_dir()
+
+
+def test_python_report_directory_is_created_on_every_run(tmp_path, monkeypatch):
+    calls = _recording_shell(monkeypatch)
+    _write(tmp_path, "pyproject.toml", "[project]\nname = 'demo'\n")
+    files = [_write(tmp_path, "src/app.py", "def run():\n    return 1\n")]
+    run_coverage(tmp_path, files, None)
+    run_coverage(tmp_path, files, None)
+    assert (tmp_path / "target" / "coverage" / "python").is_dir()
+    assert sum("run" in command[2:4] for command, _cwd in calls if command[1:3] == ["-m", "coverage"]) == 2
+
+
+def test_python_tests_failing_with_exit_one_still_record_coverage(tmp_path, monkeypatch, capsys):
+    data = tmp_path / ".coverage"
+    data.write_text("x", encoding="utf-8")
+    monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 0)
+    _record_python_lcov(tmp_path, 1, data, ["lcov"])
+    assert "Python tests exited 1" in capsys.readouterr().err
+
+
+def test_prepare_report_creates_missing_parents(tmp_path):
+    report = tmp_path / "target" / "coverage" / "typescript" / "lcov.info"
+    _prepare_report(report)
+    assert report.parent.is_dir()
+
+
+def test_lua_version_is_what_the_interpreter_writes(tmp_path):
+    binary = tmp_path / "lua"
+    binary.write_text("#!/bin/sh\nprintf 'Lua 5.4\\n'\n", encoding="utf-8")
+    binary.chmod(0o755)
+    assert _lua_version(str(binary)) == "Lua 5.4"
+    assert _lua_version(str(tmp_path / "missing")) == ""
+
+
+def test_vitest_provider_is_needed_only_for_vitest_commands():
+    assert _needs_vitest_provider(["npx", "vitest", "run", "--coverage"]) is True
+    assert _needs_vitest_provider(["npm", "run", "coverage"]) is False
+    assert _needs_vitest_provider(["npx", "--yes", "c8", "--reporter=lcov", "npm", "test"]) is False
