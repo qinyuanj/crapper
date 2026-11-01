@@ -1,3 +1,5 @@
+import pytest
+
 from crapper.coverage import (
     CoverageBundle,
     go_percent,
@@ -6,6 +8,7 @@ from crapper.coverage import (
     parse_go_profile,
     parse_jacoco_index,
     parse_lcov,
+    suffix_match,
 )
 from crapper.model import Function
 
@@ -135,3 +138,117 @@ def test_load_bundle_merges_each_report(tmp_path):
     assert bundle.percent_for(function(start_line=3, end_line=4)) == 50.0
     assert bundle.go_profile is not None
     assert bundle.jacoco is not None
+
+
+def test_suffix_match_needs_a_suffix_and_accepts_the_whole_path():
+    assert suffix_match("demo/core.clj", "./demo/core.clj") is True
+    assert suffix_match("", "") is False
+
+
+def test_a_span_with_a_single_form_is_kept():
+    html = '<span title="1 out of 1 forms covered">   7&nbsp;(f)</span>'
+    assert parse_form_coverage(html) == {7: (1, 1)}
+
+
+def test_a_broken_go_profile_names_the_line():
+    with pytest.raises(ValueError, match="line 2:"):
+        parse_go_profile("mode: set\nbroken\n")
+
+
+def test_go_segments_touching_either_end_of_the_function_count():
+    profile = parse_go_profile(
+        "mode: set\nboard.go:1.1,4.2 1 1\nboard.go:6.1,8.2 1 0\nboard.go:9.1,9.9 1 0\n"
+    )
+    assert go_percent(profile, "board.go", 4, 6) == 50.0
+    assert go_percent(profile, "board.go", 4, 4) == 100.0
+
+
+def test_go_profile_key_may_be_a_suffix_of_the_source_path():
+    profile = parse_go_profile("mode: set\ndemo/board.go:4.1,6.2 1 1\n")
+    assert go_percent(profile, "pkg/demo/board.go", 4, 6) == 100.0
+
+
+def test_go_profile_key_matches_a_source_path_with_a_literal_percent():
+    profile = parse_go_profile("mode: set\npkg/a%2541.go:4.1,6.2 1 1\n")
+    assert go_percent(profile, "pkg/a%2541.go", 4, 6) == 100.0
+
+
+def test_jacoco_counter_without_covered_is_zero():
+    xml = """<report><class name="demo/Board">
+      <method name="place" line="4"><counter type="INSTRUCTION" missed="2"/></method>
+    </class></report>"""
+    method = parse_jacoco_index(xml)["demo.Board#place"][0]
+    assert (method.missed, method.covered, method.percent) == (2, 0, 0.0)
+
+
+def test_form_html_is_keyed_by_source_path_and_wins_over_lcov(tmp_path):
+    coverage = tmp_path / "target" / "coverage"
+    html = coverage / "src" / "demo" / "core.clj.html"
+    html.parent.mkdir(parents=True)
+    html.write_text('<span title="1 out of 4 forms covered">   3&nbsp;(f)</span>', encoding="utf-8")
+    (coverage / "index.html").write_text("<html></html>", encoding="utf-8")
+    (coverage / "empty.html").write_text("", encoding="utf-8")
+    (coverage / "folder.html").mkdir()
+    (coverage / "lcov.info").write_text("SF:src/demo/core.clj\nDA:3,1\nend_of_record\n", encoding="utf-8")
+    bundle = load_bundle(tmp_path)
+    assert bundle.form_html == {"src/demo/core.clj": {3: (1, 4)}}
+    assert bundle.percent_for(function(start_line=3, end_line=3)) == 25.0
+
+
+def test_every_lcov_location_is_read(tmp_path):
+    places = [
+        "target/coverage/lcov.info",
+        "coverage/lcov.info",
+        "target/coverage/typescript/lcov.info",
+        "target/coverage/rust/lcov.info",
+        "target/coverage/python/lcov.info",
+        "target/coverage/lua/lcov.info",
+        "target/coverage/app/lcov.info",
+        "coverage/web/src-tauri/lcov.info",
+    ]
+    for index, place in enumerate(places):
+        path = tmp_path / place
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records = "".join(
+            f"SF:f{name}.py\nDA:{index + 1},1\nend_of_record\n" for name in range(index, len(places))
+        )
+        path.write_text(records, encoding="utf-8")
+    # f<k> is in every report up to place k; the record read last, place k, wins.
+    assert load_bundle(tmp_path).lcov == {f"f{index}.py": {index + 1: (1, 1)} for index in range(len(places))}
+
+
+def test_every_go_profile_location_is_read(tmp_path):
+    places = [
+        "target/coverage/coverage.out",
+        "target/coverage/go/coverage.out",
+        "coverage.out",
+        "svc/target/coverage/go/coverage.out",
+        "cmd/svc/target/coverage/go/coverage.out",
+    ]
+    for index, place in enumerate(places):
+        path = tmp_path / place
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"mode: set\nf{index}.go:1.1,2.2 1 1\n", encoding="utf-8")
+    assert sorted(load_bundle(tmp_path).go_profile) == [f"f{index}.go" for index in range(len(places))]
+
+
+def test_every_jacoco_location_is_read(tmp_path):
+    places = [
+        "target/site/jacoco/jacoco.xml",
+        "api/target/site/jacoco/jacoco.xml",
+        "svc/api/target/site/jacoco/jacoco.xml",
+    ]
+    for index, place in enumerate(places):
+        path = tmp_path / place
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f'<report><class name="demo/C{index}"><method name="m" line="1">'
+            '<counter type="INSTRUCTION" missed="0" covered="1"/></method></class></report>',
+            encoding="utf-8",
+        )
+    assert sorted(load_bundle(tmp_path).jacoco) == [f"demo.C{index}#m" for index in range(len(places))]
+
+
+def test_lcov_ignores_lines_outside_a_record():
+    parsed = parse_lcov("DA:1,1\nSF:a.clj\nDA:2,1\nDA:3,0\nend_of_record\nDA:4,1\nSF:a.clj\nDA:5,2\n")
+    assert parsed == {"a.clj": {5: (1, 1)}}

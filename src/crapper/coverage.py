@@ -21,6 +21,28 @@ _SPAN = re.compile(
 )
 _LCOV_DA = re.compile(r"DA:(\d+),(\d+)")
 _DOCTYPE = re.compile(r"<!DOCTYPE[^>]*>", re.IGNORECASE)
+_LCOV_REPORTS = (
+    "target/coverage/lcov.info",
+    "coverage/lcov.info",
+    "target/coverage/typescript/lcov.info",
+    "target/coverage/rust/lcov.info",
+    "target/coverage/python/lcov.info",
+    "target/coverage/lua/lcov.info",
+    "target/coverage/**/lcov.info",
+    "coverage/**/lcov.info",
+)
+_GO_REPORTS = (
+    "target/coverage/coverage.out",
+    "target/coverage/go/coverage.out",
+    "coverage.out",
+    "*/target/coverage/go/coverage.out",
+    "*/*/target/coverage/go/coverage.out",
+)
+_JACOCO_REPORTS = (
+    "target/site/jacoco/jacoco.xml",
+    "*/target/site/jacoco/jacoco.xml",
+    "*/*/target/site/jacoco/jacoco.xml",
+)
 
 
 def normalize_path(path: str) -> str:
@@ -39,11 +61,8 @@ def _segments(path: str) -> list[str]:
 
 
 def suffix_match(path: str, suffix: str) -> bool:
-    path_parts = _segments(path)
     suffix_parts = _segments(suffix)
-    if not suffix_parts or len(suffix_parts) > len(path_parts):
-        return False
-    return path_parts[-len(suffix_parts) :] == suffix_parts
+    return bool(suffix_parts) and _segments(path)[-len(suffix_parts) :] == suffix_parts
 
 
 def _candidates(source_path: str) -> list[str]:
@@ -51,12 +70,7 @@ def _candidates(source_path: str) -> list[str]:
     absolute = normalize_path(str(Path(source_path).resolve())) if source_path else relative
     no_src = re.sub(r"^src/", "", relative)
     absolute_no_src = re.sub(r"/src/", "/", absolute)
-    values = [relative, absolute, no_src, absolute_no_src]
-    found: list[str] = []
-    for value in values:
-        if value and value not in found:
-            found.append(value)
-    return found
+    return [value for value in dict.fromkeys([relative, absolute, no_src, absolute_no_src]) if value]
 
 
 def coverage_percent(covered: int, total: int) -> float:
@@ -76,8 +90,6 @@ def percent_for_range(lines: dict[int, tuple[int, int]] | None, start: int, end:
             continue
         covered += entry[0]
         total += entry[1]
-    if total == 0:
-        return 0.0
     return coverage_percent(covered, total)
 
 
@@ -93,27 +105,16 @@ def parse_form_coverage(html: str) -> dict[int, tuple[int, int]]:
 
 def parse_lcov(text: str) -> dict[str, dict[int, tuple[int, int]]]:
     out: dict[str, dict[int, tuple[int, int]]] = {}
-    current_file = None
-    current: dict[int, tuple[int, int]] = {}
+    current = None
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("SF:"):
-            if current_file is not None:
-                out[current_file] = current
-            current_file = line[3:]
-            current = {}
+            current = out[line[3:]] = {}
         elif line == "end_of_record":
-            if current_file is not None:
-                out[current_file] = current
-            current_file = None
-            current = {}
-        elif current_file is not None:
-            match = _LCOV_DA.match(line)
-            if match:
-                hits = int(match.group(2))
-                current[int(match.group(1))] = (1 if hits > 0 else 0, 1)
-    if current_file is not None:
-        out[current_file] = current
+            current = None
+        elif current is not None and (match := _LCOV_DA.match(line)):
+            hits = int(match.group(2))
+            current[int(match.group(1))] = (1 if hits > 0 else 0, 1)
     return out
 
 
@@ -202,13 +203,15 @@ def _profile_segments(profile, path: str):
         return None
     for candidate in _candidates(path):
         for key, value in profile.items():
-            if (
-                normalize_path(key) == candidate
-                or suffix_match(key, candidate)
-                or suffix_match(candidate, key)
-            ):
+            if _same_file(key, candidate):
                 return value
     return None
+
+
+def _same_file(key: str, candidate: str) -> bool:
+    if normalize_path(key) == candidate:
+        return True
+    return suffix_match(key, candidate) or suffix_match(candidate, key)
 
 
 def go_percent(
@@ -228,8 +231,6 @@ def go_percent(
         total += statements
         if hits > 0:
             covered += statements
-    if total == 0:
-        return 0.0
     return coverage_percent(covered, total)
 
 
@@ -245,52 +246,41 @@ class JacocoMethod:
 
 
 def _jacoco_from_index(classes, class_names, method_name, line) -> float | None:
-    pool: list[JacocoMethod] = []
-    for name in class_names:
-        for method in classes.get(f"{name}#{method_name}", []):
-            pool.append(method)
+    """The method on `line`, else the overload nearest to it."""
+
+    pool = [method for name in class_names for method in classes.get(f"{name}#{method_name}", [])]
     if not pool:
         return None
-    for method in pool:
-        if method.line == line:
-            return method.percent
-    nearest = min(pool, key=lambda method: abs(method.line - line))
-    return nearest.percent
+    return min(pool, key=lambda method: abs(method.line - line)).percent
+
+
+def _instruction_counter(method):
+    counters = (child for child in method.findall("counter") if child.get("type") == "INSTRUCTION")
+    return next(counters, None)
+
+
+def _method_line(method) -> int:
+    try:
+        return int(method.get("line") or "0")
+    except ValueError:
+        return 0
 
 
 def parse_jacoco_index(text: str) -> dict[str, list[JacocoMethod]]:
     """Key methods as `binary.class.name#method`."""
 
-    cleaned = _DOCTYPE.sub("", text)
-    root = ET.fromstring(cleaned)
+    root = ET.fromstring(_DOCTYPE.sub("", text))
     found: dict[str, list[JacocoMethod]] = {}
     for class_node in root.iter("class"):
         class_name = class_node.get("name", "").replace("/", ".")
-        for method in list(class_node):
-            if method.tag != "method":
-                continue
-            counter = next(
-                (
-                    child
-                    for child in list(method)
-                    if child.tag == "counter" and child.get("type") == "INSTRUCTION"
-                ),
-                None,
-            )
+        for method in class_node.findall("method"):
+            counter = _instruction_counter(method)
             if counter is None:
                 continue
-            try:
-                line = int(method.get("line") or "0")
-            except ValueError:
-                line = 0
+            missed = int(counter.get("missed") or "0")
+            covered = int(counter.get("covered") or "0")
             key = f"{class_name}#{method.get('name', '')}"
-            found.setdefault(key, []).append(
-                JacocoMethod(
-                    missed=int(counter.get("missed") or "0"),
-                    covered=int(counter.get("covered") or "0"),
-                    line=line,
-                )
-            )
+            found.setdefault(key, []).append(JacocoMethod(missed, covered, _method_line(method)))
     return found
 
 
@@ -362,29 +352,20 @@ class CoverageBundle:
         return self._indexes[name]
 
     def percent_for(self, function: Function) -> float | None:
+        start, end = function.start_line, function.end_line
         if function.language == "lua" and self.managed_lua is not None:
             index = self._index("managed_lua", lambda: _ExactIndex(self.managed_lua))
             lines = index.get((self.source_root / function.path).resolve())
-            return percent_for_range(lines, function.start_line, function.end_line)
+            return percent_for_range(lines, start, end)
         if function.language == "java":
-            names = []
-            if function.jacoco_class:
-                names.append(function.jacoco_class)
-            if function.namespace not in names:
-                names.append(function.namespace)
-            return _jacoco_from_index(
-                self.jacoco or {}, names, function.name, function.start_line
-            )
+            names = (function.jacoco_class or function.namespace, function.namespace)
+            return _jacoco_from_index(self.jacoco or {}, names, function.name, start)
         if function.language == "go":
-            return go_percent(
-                self.go_profile, function.path, function.start_line, function.end_line
-            )
-        html = self._html_lines(function.path)
-        if html is not None:
-            return percent_for_range(html, function.start_line, function.end_line)
-        return percent_for_range(
-            self._lcov_lines(function.path), function.start_line, function.end_line
-        )
+            return go_percent(self.go_profile, function.path, start, end)
+        lines = self._html_lines(function.path)
+        if lines is None:
+            lines = self._lcov_lines(function.path)
+        return percent_for_range(lines, start, end)
 
     def _html_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
         return self._index("form_html", lambda: _SuffixIndex(self.form_html)).get(path)
@@ -404,20 +385,6 @@ def _read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _lcov_paths(root: Path) -> list[Path]:
-    paths = [
-        root / "target" / "coverage" / "lcov.info",
-        root / "coverage" / "lcov.info",
-        root / "target" / "coverage" / "typescript" / "lcov.info",
-        root / "target" / "coverage" / "rust" / "lcov.info",
-        root / "target" / "coverage" / "python" / "lcov.info",
-        root / "target" / "coverage" / "lua" / "lcov.info",
-    ]
-    paths.extend(root.glob("target/coverage/**/lcov.info"))
-    paths.extend(root.glob("coverage/**/lcov.info"))
-    return paths
-
-
 def _merge_texts(paths: list[Path]) -> list[str]:
     texts: list[str] = []
     seen: set[Path] = set()
@@ -432,61 +399,40 @@ def _merge_texts(paths: list[Path]) -> list[str]:
     return texts
 
 
+def _report_texts(root: Path, patterns: tuple[str, ...]) -> list[str]:
+    """Each report once, in pattern order. A later LCOV record for a file wins."""
+
+    return _merge_texts([path for pattern in patterns for path in root.glob(pattern)])
+
+
 def _merge_lcov(root: Path) -> dict[str, dict[int, tuple[int, int]]]:
     merged: dict[str, dict[int, tuple[int, int]]] = {}
-    for text in _merge_texts(_lcov_paths(root)):
+    for text in _report_texts(root, _LCOV_REPORTS):
         merged.update(parse_lcov(text))
     return merged
 
 
-def _merge_go(root: Path) -> dict[str, list[tuple[int, int, int, int]]]:
-    paths = [
-        root / "target" / "coverage" / "coverage.out",
-        root / "target" / "coverage" / "go" / "coverage.out",
-        root / "coverage.out",
-    ]
-    paths.extend(root.glob("*/target/coverage/go/coverage.out"))
-    paths.extend(root.glob("*/*/target/coverage/go/coverage.out"))
-    merged: dict[str, list[tuple[int, int, int, int]]] = {}
-    for text in _merge_texts(paths):
-        for key, segments in parse_go_profile(text).items():
-            merged.setdefault(key, []).extend(segments)
-    return merged
-
-
-def _merge_jacoco(root: Path) -> dict[str, list[JacocoMethod]]:
-    paths = [root / "target" / "site" / "jacoco" / "jacoco.xml"]
-    paths.extend(root.glob("*/target/site/jacoco/jacoco.xml"))
-    paths.extend(root.glob("*/*/target/site/jacoco/jacoco.xml"))
-    merged: dict[str, list[JacocoMethod]] = {}
-    for text in _merge_texts(paths):
-        for key, methods in parse_jacoco_index(text).items():
-            merged.setdefault(key, []).extend(methods)
+def _merge_lists(texts: list[str], parse) -> dict[str, list]:
+    merged: dict[str, list] = {}
+    for text in texts:
+        for key, items in parse(text).items():
+            merged.setdefault(key, []).extend(items)
     return merged
 
 
 def _merge_forms(root: Path) -> dict[str, dict[int, tuple[int, int]]]:
     coverage_dir = root / "target" / "coverage"
     found: dict[str, dict[int, tuple[int, int]]] = {}
-    if not coverage_dir.is_dir():
-        return found
     for html_path in coverage_dir.rglob("*.html"):
         text = _read(html_path)
-        if not text or "forms covered" not in text:
-            continue
-        relative = html_path.relative_to(coverage_dir).as_posix()
-        if relative.endswith(".html"):
-            relative = relative[: -len(".html")]
-        found[relative] = parse_form_coverage(text)
+        if text and "forms covered" in text:
+            relative = html_path.relative_to(coverage_dir).as_posix().removesuffix(".html")
+            found[relative] = parse_form_coverage(text)
     return found
 
 
 def load_bundle(root: Path) -> CoverageBundle:
-    go_profile = _merge_go(root)
-    jacoco = _merge_jacoco(root)
-    return CoverageBundle(
-        lcov=_merge_lcov(root),
-        go_profile=go_profile or None,
-        jacoco=jacoco or None,
-        form_html=_merge_forms(root),
-    )
+    bundle = CoverageBundle(lcov=_merge_lcov(root), form_html=_merge_forms(root))
+    bundle.go_profile = _merge_lists(_report_texts(root, _GO_REPORTS), parse_go_profile) or None
+    bundle.jacoco = _merge_lists(_report_texts(root, _JACOCO_REPORTS), parse_jacoco_index) or None
+    return bundle
