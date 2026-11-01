@@ -256,3 +256,18 @@ def test_rust_relative_path_and_a_trait_method(tmp_path):
     path = tmp_path / "src" / "lib.rs"
     functions = rust_functions(source, str(path), str(tmp_path))
     assert [(fn.namespace, fn.name) for fn in functions] == [("demo", "draw")]
+
+
+def test_python_test_file_names():
+    assert is_test_file("src/board_test.py") is True
+    assert is_test_file("src/test_board.py") is True
+    assert is_test_file("src/test_board.txt") is False
+    assert is_test_file("src/board.py") is False
+
+
+def test_test_and_skipped_directories_are_pruned(tmp_path):
+    for relative in ("spec/a.lua", "node_modules/b.ts", "__tests__/c.ts", "lib/d.go"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True)
+        path.write_text("x\n", encoding="utf-8")
+    assert iter_source_files([tmp_path]) == [(tmp_path / "lib" / "d.go").resolve()]

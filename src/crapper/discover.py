@@ -1,6 +1,8 @@
 """Find source files and decide which language each one is written in."""
 
 import os
+import subprocess
+import sys
 from fnmatch import fnmatchcase
 from functools import cache
 from pathlib import Path
@@ -46,6 +48,22 @@ SKIP_DIRS = {
 
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__"}
 
+_TEST_SUFFIXES = (
+    "_test.go",
+    "_test.clj",
+    "_test.cljc",
+    "_test.cljs",
+    "_test.bb",
+    ".test.ts",
+    ".spec.ts",
+    ".test.tsx",
+    ".spec.tsx",
+    ".test.mts",
+    ".spec.mts",
+    "_spec.lua",
+    "_test.py",
+)
+
 
 def language_of(path: str | Path) -> str | None:
     file_path = Path(path)
@@ -58,45 +76,25 @@ def language_of(path: str | Path) -> str | None:
 def is_test_file(path: str | Path) -> bool:
     file_path = Path(path)
     name = file_path.name
-    if name.endswith("_test.go"):
+    if name.endswith(_TEST_SUFFIXES) or name == "conftest.py":
         return True
-    if name.endswith(("_test.clj", "_test.cljc", "_test.cljs", "_test.bb")):
-        return True
-    if name.endswith(
-        (
-            ".test.ts",
-            ".spec.ts",
-            ".test.tsx",
-            ".spec.tsx",
-            ".test.mts",
-            ".spec.mts",
-        )
-    ):
-        return True
-    if name.endswith("_spec.lua"):
-        return True
-    if name == "conftest.py":
-        return True
-    if name.endswith("_test.py") or (name.startswith("test_") and name.endswith(".py")):
+    if name.startswith("test_") and name.endswith(".py"):
         return True
     return any(part in TEST_DIRS for part in file_path.parts)
 
 
+def is_source_file(path: Path) -> bool:
+    return language_of(path) is not None and not is_test_file(path)
+
+
 def _walk(root: Path) -> list[Path]:
-    if not root.exists():
-        return []
     if root.is_file():
         return [root]
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name for name in dirnames if name not in SKIP_DIRS and name not in TEST_DIRS
-        ]
-        for name in filenames:
-            path = Path(dirpath) / name
-            if language_of(path) is None or is_test_file(path):
-                continue
-            found.append(path)
+        dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS and name not in TEST_DIRS]
+        paths = (Path(dirpath) / name for name in filenames)
+        found.extend(path for path in paths if is_source_file(path))
     return found
 
 
@@ -122,24 +120,26 @@ def _matches_exclusion(relative: str, pattern: str) -> bool:
     return matches(0, 0)
 
 
+def _pattern(value: str) -> str:
+    return value.replace("\\", "/").removeprefix("./").rstrip("/")
+
+
+def excluded(path: Path, root: Path, exclusions: list[str]) -> bool:
+    """A match on a directory excludes everything under it. Outside `root` never matches."""
+
+    try:
+        relative = Path(path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return False
+    return any(_matches_exclusion(relative, _pattern(value)) for value in exclusions)
+
+
 def exclude_files(files: list[Path], project_root: Path, exclusions: list[str]) -> list[Path]:
     """Apply project-relative exclusions after any source selection mode."""
+
     if not exclusions:
         return files
-    patterns = [
-        value.replace("\\", "/").removeprefix("./").rstrip("/")
-        for value in exclusions
-    ]
-    kept = []
-    for path in files:
-        try:
-            relative = path.resolve().relative_to(project_root.resolve()).as_posix()
-        except ValueError:
-            kept.append(path)
-            continue
-        if not any(_matches_exclusion(relative, pattern) for pattern in patterns):
-            kept.append(path)
-    return kept
+    return [path for path in files if not excluded(path, project_root, exclusions)]
 
 
 def iter_source_files(roots: list[Path]) -> list[Path]:
@@ -148,3 +148,64 @@ def iter_source_files(roots: list[Path]) -> list[Path]:
         for path in _walk(root):
             files.add(path.resolve())
     return sorted(files, key=lambda path: path.as_posix())
+
+
+def _git(root: Path, *args: str) -> bytes | None:
+    result = subprocess.run(["git", *args], cwd=root, check=False, capture_output=True)
+    if result.returncode != 0:
+        print(os.fsdecode(result.stderr).strip() or "git status failed", file=sys.stderr)
+        return None
+    return result.stdout
+
+
+def _status_paths(output: bytes) -> list[str]:
+    """`git status -z` entries are `XY path`. Renames are off, so one path each.
+
+    The empty entry after the last NUL names the repository itself, which the
+    caller drops along with every other path that is not a file.
+    """
+
+    return [entry[3:] for entry in os.fsdecode(output).split("\0")]
+
+
+_STATUS = ("status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
+
+
+def _walked(path: Path, root: Path) -> bool:
+    """A file under `root` that is outside every directory the walk skips."""
+
+    if not path.is_file() or not path.is_relative_to(root):
+        return False
+    return SKIP_DIRS.isdisjoint(path.relative_to(root).parts[:-1])
+
+
+def changed_files(root: Path) -> list[Path]:
+    """Existing files under `root` that git reports as added, edited, or untracked.
+
+    Files in the directories the walk skips (`vendor`, `node_modules`, ...) are left out.
+    """
+
+    root = root.resolve()
+    top = _git(root, "rev-parse", "--show-toplevel")
+    status = None if top is None else _git(root, *_STATUS)
+    if status is None:
+        return []
+    base = Path(os.fsdecode(top).removesuffix("\n"))
+    found = {(base / name).resolve() for name in _status_paths(status)}
+    return sorted((path for path in found if _walked(path, root)), key=lambda path: path.as_posix())
+
+
+def exclusion_error(pattern: str) -> str | None:
+    """Exclusions are anchored at the project root and stay inside it."""
+
+    normalized = pattern.replace("\\", "/")
+    if Path(pattern).is_absolute() or normalized.startswith("/") or ".." in normalized.split("/"):
+        return f"--exclude must be a path or glob inside the project root: {pattern}"
+    return None
+
+
+def under_roots(files: list[Path], roots: list[Path]) -> list[Path]:
+    """Files inside at least one root, compared after resolving both sides. A file root holds itself."""
+
+    resolved = [Path(root).resolve() for root in roots]
+    return [path for path in files if any(Path(path).resolve().is_relative_to(root) for root in resolved)]

@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from crapper.analyze import analyze_files
 from crapper.coverage import load_bundle
-from crapper.discover import exclude_files, is_test_file, iter_source_files, language_of
+from crapper.discover import (
+    changed_files,
+    exclude_files,
+    excluded,
+    exclusion_error,
+    is_source_file,
+    iter_source_files,
+    language_of,
+    under_roots,
+)
 from crapper.metrics import write_metrics
 from crapper.report import format_report
 from crapper.runners import CoverageError, run_coverage
@@ -29,17 +37,20 @@ Options:
   --root <path>                 Project root. Metrics are written here.
                                 Default: the current directory.
   -s, --source-root <path>      Walk this tree instead of the project root.
-                                May be repeated.
+                                May be repeated. Path arguments and --changed
+                                are narrowed to the files under a source root.
   --exclude <path-or-glob>      Exclude a project-relative file or directory.
                                 May be repeated; applies to every selection mode.
                                 Both separators work. * and ? match within a path
                                 segment; ** matches zero or more whole segments.
                                 Matching directories exclude their descendants.
+                                An absolute pattern or one with .. is an error.
   --full-tree                   Replace the complete configured business tree.
                                 Rejects --changed, positionals and existing coverage.
                                 --no-coverage publishes complexity only.
-  --changed                     Analyze added and modified source files from
-                                git status.
+  --changed                     Analyze source files git reports as added,
+                                modified, renamed, or untracked under the
+                                project root, outside the skipped directories.
   --no-coverage                 Score complexity only. Coverage and CRAP are N/A.
   --use-existing-coverage       Read coverage already on disk. Do not rerun tests.
   --coverage-command <cmd>      Run this command instead of the per-language
@@ -51,13 +62,19 @@ Options:
 
 Arguments:
   path              File or directory to analyze. Test paths are included when
-                    you name them explicitly.
+                    you name them explicitly. With --source-root, a named file
+                    outside every root is dropped:
+                    "Skipping <path>; it is outside the source roots" on stderr.
   filter            When the argument is not a path, only source files whose
                     path contains this text are analyzed.
 
 With no paths, source files under the project root are analyzed. Directories
 named test, tests, spec, specs, vendor, node_modules, and target are skipped,
 as are *_test.go, *.spec.ts, test_*.py, *_test.py, and *_spec.lua files.
+
+Exit status: 0 when the analysis completed, 2 when --threshold was exceeded
+after the snapshot was written, 1 for a usage error, failed Lua or custom
+coverage, or a snapshot that could not be written.
 
 Coverage, when it is produced:
   Clojure      clj -M:cov --lcov, then Cloverage form counts or LCOV
@@ -103,6 +120,58 @@ def _take(args: list[str], index: int, option: str) -> str:
     return args[index + 1]
 
 
+def _threshold(raw: str) -> float:
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError("--threshold requires a number") from exc
+
+
+def _lua_shards(raw: str) -> int:
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError("--lua-shards requires a positive integer")
+    return int(raw)
+
+
+_VALUES = {
+    "--root": ("project_root", Path),
+    "--coverage-command": ("coverage_command", str),
+    "--threshold": ("threshold", _threshold),
+    "--lua-shards": ("lua_shards", _lua_shards),
+}
+_LISTS = {"-s": "source_roots", "--source-root": "source_roots", "--exclude": "exclusions"}
+_FLAGS = {
+    "--no-coverage": "no_coverage",
+    "--use-existing-coverage": "use_existing_coverage",
+    "--changed": "changed",
+    "--full-tree": "full_tree",
+}
+
+
+def _apply(options: Options, args: list[str], index: int) -> int:
+    """Apply the argument at `index`. Returns the index of the next one."""
+
+    arg = args[index]
+    if arg in _LISTS:
+        getattr(options, _LISTS[arg]).append(_take(args, index, arg))
+        return index + 2
+    if arg in _VALUES:
+        name, convert = _VALUES[arg]
+        setattr(options, name, convert(_take(args, index, arg)))
+        return index + 2
+    if arg in _FLAGS:
+        setattr(options, _FLAGS[arg], True)
+        return index + 1
+    if arg.startswith("-"):
+        raise ValueError(f"Unknown option: {arg}")
+    options.positionals.append(arg)
+    return index + 1
+
+
+def _usage_error(message: str) -> Options:
+    return Options(action="help", message=f"{message}\n\n{HELP}", exit_code=1)
+
+
 def parse_args(argv: list[str] | None = None) -> Options:
     args = list(sys.argv[1:] if argv is None else argv)
     if any(arg in {"-h", "--help"} for arg in args):
@@ -111,97 +180,32 @@ def parse_args(argv: list[str] | None = None) -> Options:
     index = 0
     try:
         while index < len(args):
-            arg = args[index]
-            if arg in {"-s", "--source-root"}:
-                options.source_roots.append(_take(args, index, arg))
-                index += 2
-                continue
-            if arg == "--exclude":
-                options.exclusions.append(_take(args, index, arg))
-                index += 2
-                continue
-            if arg == "--root":
-                options.project_root = Path(_take(args, index, arg))
-                index += 2
-                continue
-            if arg == "--coverage-command":
-                options.coverage_command = _take(args, index, arg)
-                index += 2
-                continue
-            if arg == "--threshold":
-                raw = _take(args, index, arg)
-                try:
-                    options.threshold = float(raw)
-                except ValueError as exc:
-                    raise ValueError("--threshold requires a number") from exc
-                index += 2
-                continue
-            if arg == "--lua-shards":
-                raw = _take(args, index, arg)
-                if not raw.isdigit() or int(raw) < 1:
-                    raise ValueError("--lua-shards requires a positive integer")
-                options.lua_shards = int(raw)
-                index += 2
-                continue
-            if arg == "--no-coverage":
-                options.no_coverage = True
-                index += 1
-                continue
-            if arg == "--use-existing-coverage":
-                options.use_existing_coverage = True
-                index += 1
-                continue
-            if arg == "--full-tree":
-                options.full_tree = True
-                index += 1
-                continue
-            if arg == "--changed":
-                options.changed = True
-                index += 1
-                continue
-            if arg.startswith("-"):
-                raise ValueError(f"Unknown option: {arg}")
-            options.positionals.append(arg)
-            index += 1
+            index = _apply(options, args, index)
     except ValueError as exc:
-        return Options(action="help", message=f"{exc}\n\n{HELP}", exit_code=1)
+        return _usage_error(str(exc))
+    message = _conflict(options)
+    return _usage_error(message) if message else options
+
+
+# A full-tree refresh replaces every entry, so it must see the whole tree, freshly.
+_NOT_WITH_FULL_TREE = (
+    ("path arguments", "positionals"),
+    ("--changed", "changed"),
+    ("--use-existing-coverage", "use_existing_coverage"),
+)
+
+
+def _conflict(options: Options) -> str | None:
     if options.no_coverage and options.coverage_command:
-        return Options(
-            action="help",
-            message=f"--no-coverage cannot be combined with --coverage-command\n\n{HELP}",
-            exit_code=1,
-        )
-    if options.full_tree and (options.changed or options.positionals or options.use_existing_coverage):
-        return Options(
-            action="help",
-            message="--full-tree cannot be combined with --changed, positional paths/filters, "
-                    f"or --use-existing-coverage\n\n{HELP}",
-            exit_code=1,
-        )
-    return options
-
-
-def _changed_files(root: Path) -> list[Path]:
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(result.stderr.strip() or "git status failed", file=sys.stderr)
-        return []
-    found: list[Path] = []
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        path_text = line[3:].strip()
-        if " -> " in path_text:
-            path_text = path_text.split(" -> ", 1)[1]
-        path_text = path_text.strip('"')
-        found.append((root / path_text).resolve())
-    return found
+        return "--no-coverage cannot be combined with --coverage-command"
+    errors = [error for error in map(exclusion_error, options.exclusions) if error]
+    if errors:
+        return errors[0]
+    if options.full_tree:
+        for flag, name in _NOT_WITH_FULL_TREE:
+            if getattr(options, name):
+                return f"--full-tree cannot be combined with {flag}"
+    return None
 
 
 def _positionals(root: Path, args: list[str]) -> tuple[list[Path], list[str]]:
@@ -219,31 +223,40 @@ def _positionals(root: Path, args: list[str]) -> tuple[list[Path], list[str]]:
 
 
 def _changed_source(root: Path) -> list[Path]:
-    return [
-        path
-        for path in _changed_files(root)
-        if language_of(path) is not None and not is_test_file(path)
-    ]
+    return [path for path in changed_files(root) if is_source_file(path)]
 
 
-def _explicit_files(existing: list[Path]) -> list[Path]:
+def _in_scope(files: list[Path], roots: list[Path]) -> list[Path]:
+    """Source roots narrow every other selection to the files under them."""
+
+    return under_roots(files, roots) if roots else files
+
+
+def _shown(path: Path, root: Path) -> str:
+    return path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix()
+
+
+def _explicit_files(existing: list[Path], root: Path, exclusions: list[str], roots: list[Path]) -> list[Path]:
     files: list[Path] = []
     for path in existing:
         if path.is_dir():
-            files.extend(iter_source_files([path]))
+            files.extend(_in_scope(iter_source_files([path]), roots))
+        elif not _in_scope([path], roots):
+            print(f"Skipping {_shown(path, root)}; it is outside the source roots", file=sys.stderr)
+        elif excluded(path, root, exclusions):
+            print(f"Skipping excluded {_shown(path, root)}", file=sys.stderr)
         elif language_of(path) is not None:
             files.append(path)
     return files
 
 
 def _selected(options: Options, root: Path, existing: list[Path]) -> list[Path]:
+    roots = [(root / path).resolve() for path in options.source_roots]
     if options.changed:
-        return _changed_source(root)
-    if options.source_roots:
-        return iter_source_files([(root / path).resolve() for path in options.source_roots])
+        return _in_scope(_changed_source(root), roots)
     if existing:
-        return _explicit_files(existing)
-    return iter_source_files([root])
+        return _explicit_files(existing, root, options.exclusions, roots)
+    return iter_source_files(roots or [root])
 
 
 def _apply_filters(files: list[Path], filters: list[str]) -> list[Path]:
@@ -284,6 +297,14 @@ def platform_warning(platform: str, root: Path) -> str | None:
             "for speed and working symlinks."
         )
     return None
+
+
+def _threshold_exceeded(entries, threshold: float | None) -> bool:
+    scored = [entry.crap for entry in entries if entry.crap is not None]
+    if threshold is None or not scored or max(scored) <= threshold:
+        return False
+    print(f"CRAP threshold exceeded: {max(scored):.1f} > {threshold:.1f}", file=sys.stderr)
+    return True
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -340,15 +361,7 @@ def run(argv: list[str] | None = None) -> int:
         return 1
     print(report, end="", flush=True)
     print(f"Wrote {metrics}", file=sys.stderr)
-    if options.threshold is not None:
-        scored = [entry.crap for entry in entries if entry.crap is not None]
-        if scored and max(scored) > options.threshold:
-            print(
-                f"CRAP threshold exceeded: {max(scored):.1f} > {options.threshold:.1f}",
-                file=sys.stderr,
-            )
-            return 2
-    return 0
+    return 2 if _threshold_exceeded(entries, options.threshold) else 0
 
 
 def main(argv: list[str] | None = None) -> None:

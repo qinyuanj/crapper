@@ -25,10 +25,14 @@ The first run creates `.venv` and installs the tool. From a project root it walk
 ./crapper --no-coverage                  # complexity only; coverage is N/A
 ./crapper --use-existing-coverage        # read reports already on disk
 ./crapper src/demo/core.clj src/ui       # these files and trees
-./crapper --changed                      # git additions and edits
+./crapper --changed                      # git additions, edits, renames, untracked files
+./crapper --exclude src/gen --exclude '**/vendor'   # leave these out
+./crapper --full-tree -s src             # one complete snapshot, or nothing
 ./crapper combat                         # path fragment, same idea as crap4clj
 ./crapper --threshold 30                 # exit 2 when the worst score is higher
 ```
+
+`--changed` asks git for added, modified, renamed, and untracked files (files inside a new directory included) under the project root, which may be a subdirectory of the repository. Deleted files are left out, and so are files in the directories the walk skips (`vendor`, `node_modules`, `.uml-viewer`, ...), judged below the project root. It works in a repository with no commits yet.
 
 ## Source roots and exclusions
 
@@ -50,7 +54,16 @@ excludes all descendants. `server/_trigger` therefore preserves
 `client/_trigger` and `server/_trigger_extra`. Exclusions also apply to explicitly
 named test files. Existing default skips, including `lua_modules` and
 `.luarocks`, still apply during discovery; naming an individual test file
-explicitly remains supported.
+explicitly remains supported. A named file that is excluded is dropped with
+`Skipping excluded <path>` on stderr.
+
+Combined with `--changed` or with path arguments, `--source-root` narrows that
+selection instead of walking: only files under at least one source root are
+kept, compared after resolving symlinks. A file you name that is outside every
+root is dropped with `Skipping <path>; it is outside the source roots` on
+stderr; files found by `--changed` or by walking a named directory are dropped
+silently. So `./crapper -s src src/a.py` analyzes only `src/a.py`. Text filters
+and `--exclude` apply afterwards, as they do to every selection.
 
 Exclusion patterns use `/` or `\` as separators on every platform. An optional
 leading `./` and trailing separator are ignored. Matching is case-sensitive.
@@ -61,8 +74,9 @@ excludes its descendants, including when matched by a glob. For example,
 `server/*.lua` excludes immediate Lua files, `**/generated` excludes generated
 directories at any depth, and `server/**/private?.lua` matches across nested
 directories. Quote globs so the shell passes them unchanged. Use project-relative
-paths without `..`; sources explicitly selected outside the project root are
-not matched by project-relative exclusions.
+paths: an absolute pattern or one containing `..` is a usage error (exit 1).
+Sources explicitly selected outside the project root are not matched by
+project-relative exclusions.
 
 These CLI scenarios were tested with backslash exclusions, absolute source
 roots, and project paths containing spaces.
@@ -90,6 +104,11 @@ crapper --root /path/to/project --full-tree --no-coverage \
 `--use-existing-coverage`. These options retain their existing selection behavior
 when `--full-tree` is absent. `--no-coverage` explicitly selects a complete
 complexity snapshot; it does not claim a fresh covered quality refresh.
+| Exit | Meaning |
+| --- | --- |
+| 0 | analysis completed and the snapshot was written |
+| 2 | `--threshold` was exceeded, after the snapshot was written |
+| 1 | usage error, failed Lua or custom coverage, or the snapshot could not be written |
 
 Deleting sources removes their entries on the next complete refresh. Deleting
 the final source atomically replaces the previous snapshot with `{:entries []}`.
