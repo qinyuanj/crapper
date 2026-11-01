@@ -132,3 +132,8 @@ def test_empty_tree_publication_removes_all_previous_entries(tmp_path):
     assert metrics.write_metrics([], tmp_path) == destination
     assert destination.read_bytes() == b"{:entries []}\n"
     assert list(destination.parent.iterdir()) == [destination]
+
+
+def test_a_published_snapshot_is_readable_by_others(tmp_path):
+    destination = metrics.write_metrics([], tmp_path)
+    assert destination.stat().st_mode & 0o777 == 0o644

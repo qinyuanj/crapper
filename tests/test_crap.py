@@ -1,5 +1,5 @@
 from crapper.crap import crap_score, sort_entries
-from crapper.metrics import render_edn
+from crapper.metrics import render_edn, write_metrics
 from crapper.model import Entry
 from crapper.report import format_report
 
@@ -95,3 +95,11 @@ def test_edn_writes_nil_for_missing_coverage():
     text = render_edn([entry(coverage=None, crap=None)])
     assert ":coverage nil" in text
     assert ":crap nil" in text
+
+
+def test_metrics_are_written_into_a_new_root_and_rewritten(tmp_path):
+    root = tmp_path / "new" / "project"
+    path = write_metrics([entry()], root)
+    assert path == root / ".metrics" / "crap.edn"
+    write_metrics([], root)
+    assert path.read_text(encoding="utf-8") == "{:entries []}\n"

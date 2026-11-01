@@ -1,9 +1,8 @@
 """Write the crap4clj snapshot uml-viewer reads."""
 
-import os
-import tempfile
 from pathlib import Path
 
+from crapper.atomic import write_bytes
 from crapper.model import Entry
 
 
@@ -56,26 +55,11 @@ def render_edn(entries: list[Entry]) -> str:
 def write_metrics(entries: list[Entry], root: Path) -> Path:
     """Replace the snapshot atomically, or propagate failure without changing it.
 
-    Render and encode before staging beside the destination. Closing the staged
-    file before replacement keeps the swap atomic. An empty tree publishes an
-    empty entries map, removing all previous metrics.
+    Render and encode before staging beside the destination; crapper.atomic
+    stages and swaps it. An empty tree publishes an empty entries map,
+    removing all previous metrics.
     """
     payload = render_edn(entries).encode("utf-8")
     path = metrics_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    staged = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as stream:
-            staged = Path(stream.name)
-            stream.write(payload)
-        os.replace(staged, path)
-    finally:
-        if staged is not None:
-            staged.unlink(missing_ok=True)
+    write_bytes(path, payload)
     return path
