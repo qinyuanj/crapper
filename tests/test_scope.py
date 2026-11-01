@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from crapper.discover import changed_files, excluded, exclusion_error, under_roots, exclude_files
+from crapper.discover import (
+    changed_files,
+    exclude_files,
+    excluded,
+    exclusion_error,
+    under_roots,
+    without_excluded,
+)
 
 
 def _write(root: Path, relative: str, text: str = "x\n") -> Path:
@@ -187,3 +194,8 @@ def test_under_roots_compares_after_resolving_both_sides(tmp_path):
     linked.symlink_to(real)
     assert under_roots([real / "src/a.py"], [linked / "src"]) == [real / "src/a.py"]
     assert under_roots([linked / "src/a.py"], [real / "src" / ".." / "src"]) == [linked / "src/a.py"]
+
+
+def test_without_excluded_is_exclude_files(tmp_path):
+    files = [tmp_path / "gen/a.py", tmp_path / "b.py"]
+    assert without_excluded(files, tmp_path, ["gen"]) == exclude_files(files, tmp_path, ["gen"]) == [files[1]]

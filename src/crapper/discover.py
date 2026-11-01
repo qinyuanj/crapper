@@ -142,6 +142,12 @@ def exclude_files(files: list[Path], project_root: Path, exclusions: list[str]) 
     return [path for path in files if not excluded(path, project_root, exclusions)]
 
 
+def without_excluded(files: list[Path], root: Path, patterns: list[str]) -> list[Path]:
+    """The name dryer and mutator import; same rule as exclude_files."""
+
+    return exclude_files(files, root, patterns)
+
+
 def iter_source_files(roots: list[Path]) -> list[Path]:
     files: set[Path] = set()
     for root in roots:
