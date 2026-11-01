@@ -12,10 +12,14 @@ from crapper.languages.treesitter import (
     child_of_type,
     complexity,
     descendants,
+    enclosing_names,
     end_line,
+    has_ancestor,
     node_text,
     parse,
     start_line,
+    strip_root,
+    strip_src,
 )
 from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
@@ -42,6 +46,7 @@ _FUNCTION_TYPES = {
     "arrow_function",
     "function_expression",
 }
+_CLASSES = {"class_declaration", "abstract_class_declaration"}
 
 
 def _is_decision(node) -> bool:
@@ -59,43 +64,12 @@ def _grammar(path: str) -> str:
 
 
 def _module_namespace(path: str, source_root: str | None) -> str:
-    relative = path.replace("\\", "/")
-    root = (source_root or "").replace("\\", "/").rstrip("/")
-    if root and root != "." and relative.startswith(root + "/"):
-        relative = relative[len(root) + 1 :]
-    elif relative.startswith("./"):
-        relative = relative[2:]
-    if relative.startswith("src/"):
-        relative = relative[4:]
-    elif "/src/" in relative:
-        relative = relative.split("/src/", 1)[1]
+    relative = strip_src(strip_root(path.replace("\\", "/"), source_root))
     for suffix in (".tsx", ".mts", ".cts", ".ts"):
         if relative.endswith(suffix):
             relative = relative[: -len(suffix)]
             break
     return relative.replace("/", ".")
-
-
-def _inside_function(node) -> bool:
-    current = node.parent
-    while current is not None:
-        if current.type in _FUNCTION_TYPES:
-            return True
-        current = current.parent
-    return False
-
-
-def _class_names(data: bytes, node) -> list[str]:
-    names: list[str] = []
-    current = node.parent
-    while current is not None:
-        if current.type in {"class_declaration", "abstract_class_declaration"}:
-            ident = child_of_type(current, "type_identifier", "identifier")
-            if ident is not None:
-                names.append(node_text(data, ident))
-        current = current.parent
-    names.reverse()
-    return names
 
 
 def _has_body(node) -> bool:
@@ -107,7 +81,7 @@ def _append(found: list[Function], **kwargs) -> None:
 
 
 def _append_function(found, data, node, module, path) -> None:
-    if _inside_function(node) or not _has_body(node):
+    if has_ancestor(node, _FUNCTION_TYPES) or not _has_body(node):
         return
     ident = child_of_type(node, "identifier")
     if ident is None:
@@ -128,13 +102,13 @@ def _append_method(found, data, node, module, path) -> None:
     if not _has_body(node):
         return
     ident = child_of_type(node, "property_identifier", "identifier")
-    classes = _class_names(data, node)
+    classes = enclosing_names(data, node, _CLASSES, "type_identifier", "identifier")
     if ident is None or not classes:
         return
     _append(
         found,
         name=node_text(data, ident),
-        namespace=f"{module}.{'.'.join(classes)}",
+        namespace=".".join([module, *classes]),
         complexity=complexity(node, _is_decision, _skip),
         start_line=start_line(node),
         end_line=end_line(node),
@@ -144,7 +118,7 @@ def _append_method(found, data, node, module, path) -> None:
 
 
 def _append_arrows(found, data, node, module, path) -> None:
-    if _inside_function(node):
+    if has_ancestor(node, _FUNCTION_TYPES):
         return
     for declarator in node.children:
         if declarator.type != "variable_declarator":

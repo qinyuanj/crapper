@@ -12,7 +12,9 @@ from crapper.languages.treesitter import (
     binary_logic,
     child_of_type,
     complexity,
+    enclosing_names,
     end_line,
+    has_ancestor,
     node_text,
     parse,
     start_line,
@@ -28,6 +30,7 @@ _NESTED_TYPES = {
     "record_declaration",
     "annotation_type_declaration",
 }
+_EXECUTABLES = {"method_declaration", "constructor_declaration", "lambda_expression"}
 _DECISIONS = {
     "if_statement",
     "for_statement",
@@ -48,35 +51,9 @@ def _skip(node) -> bool:
     return node.type in _NESTED_TYPES or node.type == "class_body"
 
 
-def _inside_executable(node) -> bool:
-    current = node.parent
-    while current is not None:
-        if current.type in {
-            "method_declaration",
-            "constructor_declaration",
-            "lambda_expression",
-        }:
-            return True
-        current = current.parent
-    return False
-
-
 def _package_name(source: str) -> str | None:
     match = _PACKAGE.search(source)
     return match.group(1) if match else None
-
-
-def _type_chain(data: bytes, node) -> list[str]:
-    names: list[str] = []
-    current = node.parent
-    while current is not None:
-        if current.type in _NESTED_TYPES:
-            ident = child_of_type(current, "identifier")
-            if ident is not None:
-                names.append(node_text(data, ident))
-        current = current.parent
-    names.reverse()
-    return names
 
 
 def _qualify(package: str | None, names: list[str], nested: str) -> str:
@@ -92,10 +69,10 @@ def functions_in_source(source: str, path: str) -> list[Function]:
     found: list[Function] = []
 
     def visit(node) -> None:
-        if node.type == "method_declaration" and not _inside_executable(node):
+        if node.type == "method_declaration" and not has_ancestor(node, _EXECUTABLES):
             if child_of_type(node, "block") is not None:
                 ident = child_of_type(node, "identifier")
-                names = _type_chain(data, node)
+                names = enclosing_names(data, node, _NESTED_TYPES, "identifier")
                 if ident is not None and names:
                     found.append(
                         Function(

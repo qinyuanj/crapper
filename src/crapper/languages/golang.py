@@ -10,12 +10,14 @@ uml-viewer makes between a class and its operations.
 from pathlib import Path
 
 from crapper.languages.treesitter import (
+    absolute_path,
     binary_logic,
     child_of_type,
+    child_text,
     complexity,
+    descendant_text,
     descendants,
     end_line,
-    node_text,
     parse,
     start_line,
 )
@@ -30,6 +32,7 @@ _DECISIONS = {
     "communication_case",
     "default_case",
 }
+_DECLARATIONS = {"function_declaration", "method_declaration"}
 
 
 def _is_decision(node) -> bool:
@@ -40,104 +43,63 @@ def _skip(_node) -> bool:
     return False
 
 
-def _package_clause(data: bytes, root) -> str:
-    for node in descendants(root):
-        if node.type == "package_identifier":
-            return node_text(data, node)
-    return ""
-
-
-def _type_identifiers(node) -> list[str]:
-    found = []
-    for item in descendants(node):
-        if item.type == "type_identifier":
-            found.append(item)
-    return found
-
-
 def _receiver_type(data: bytes, method) -> str | None:
     params = child_of_type(method, "parameter_list")
-    if params is None:
-        return None
-    idents = _type_identifiers(params)
-    if not idents:
-        return None
-    return node_text(data, idents[0])
+    return None if params is None else descendant_text(data, params, "type_identifier")
 
 
-def _method_name(data: bytes, method) -> str | None:
-    ident = child_of_type(method, "field_identifier")
-    if ident is None:
+def _name_and_namespace(data: bytes, node, package_ns: str) -> tuple[str, str] | None:
+    if node.type == "function_declaration":
+        name = child_text(data, node, "identifier")
+        return (name, package_ns) if name else None
+    name = child_text(data, node, "field_identifier")
+    receiver = _receiver_type(data, node)
+    if not name or not receiver:
         return None
-    return node_text(data, ident)
+    return name, f"{package_ns}.{receiver}"
 
 
-def _function_name(data: bytes, fn) -> str | None:
-    ident = child_of_type(fn, "identifier")
-    if ident is None:
-        return None
-    return node_text(data, ident)
+def _go_module(start: Path) -> tuple[str, Path] | None:
+    """The `module` line of the nearest go.mod, and its directory."""
+
+    for directory in (start, *start.parents):
+        candidate = directory / "go.mod"
+        if candidate.is_file():
+            for line in candidate.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("module "):
+                    return line.split(None, 1)[1].strip(), directory
+            return None
+    return None
 
 
 def package_namespace(path: str, package_name: str) -> str:
     """Import path of the package, or the package clause when no go.mod exists."""
 
-    current = Path(path).resolve().parent
-    module = None
-    module_dir = None
-    while True:
-        candidate = current / "go.mod"
-        if candidate.is_file():
-            for line in candidate.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped.startswith("module "):
-                    module = stripped.split(None, 1)[1].strip()
-                    module_dir = current
-                    break
-            break
-        if current.parent == current:
-            break
-        current = current.parent
-    if not module or module_dir is None:
+    directory = Path(path).resolve().parent
+    found = _go_module(directory)
+    if found is None:
         return package_name
-    relative = Path(path).resolve().parent.relative_to(module_dir).as_posix()
+    module, module_dir = found
+    relative = directory.relative_to(module_dir).as_posix()
     if relative == ".":
         return module
     return f"{module}/{relative}"
-
-
-def _absolute(path: str, project_root: str | None) -> str:
-    file_path = Path(path)
-    if file_path.is_absolute():
-        return str(file_path)
-    if project_root:
-        return str((Path(project_root) / file_path).resolve())
-    return str(file_path.resolve())
 
 
 def functions_in_source(
     source: str, path: str, project_root: str | None = None
 ) -> list[Function]:
     data, tree = parse(source, "go")
-    package_name = _package_clause(data, tree.root_node)
-    package_ns = package_namespace(_absolute(path, project_root), package_name)
+    package_name = descendant_text(data, tree.root_node, "package_identifier") or ""
+    package_ns = package_namespace(absolute_path(path, project_root), package_name)
     found: list[Function] = []
     for node in descendants(tree.root_node):
-        if node.type not in {"function_declaration", "method_declaration"}:
+        if node.type not in _DECLARATIONS or child_of_type(node, "block") is None:
             continue
-        if child_of_type(node, "block") is None:
+        named = _name_and_namespace(data, node, package_ns)
+        if named is None:
             continue
-        if node.type == "method_declaration":
-            name = _method_name(data, node)
-            receiver = _receiver_type(data, node)
-            if not name or not receiver:
-                continue
-            namespace = f"{package_ns}.{receiver}"
-        else:
-            name = _function_name(data, node)
-            if not name:
-                continue
-            namespace = package_ns
+        name, namespace = named
         found.append(
             Function(
                 name=name,

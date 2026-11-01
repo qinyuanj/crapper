@@ -207,3 +207,15 @@ def test_a_source_that_does_not_parse_is_refused_not_measured():
     # so a broken file would publish CRAP for code that cannot run.
     with pytest.raises(ValueError, match="broken.lua"):
         functions_in_source("function M.choose(x\n  return x\nend\n", "src/broken.lua")
+
+
+def test_a_closure_with_no_matching_target_is_not_an_entry():
+    assert functions_in_source("a = 1, function() end\n", "src/m.lua", "/proj") == []
+    found = functions_in_source("a, b = 1, function() end\n", "src/m.lua", "/proj")
+    assert [fn.name for fn in found] == ["b"]
+    assert functions_in_source("print(function() end)\n", "src/m.lua", "/proj") == []
+
+
+
+def test_an_iterator_closure_is_not_an_entry():
+    assert functions_in_source("for k in function() end do end\n", "src/m.lua", "/proj") == []

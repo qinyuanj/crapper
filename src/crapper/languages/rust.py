@@ -14,10 +14,14 @@ import re
 from pathlib import Path
 
 from crapper.languages.treesitter import (
+    absolute_path,
     binary_logic,
     child_of_type,
+    child_text,
     complexity,
+    descendant_text,
     descendants,
+    enclosing_names,
     end_line,
     node_text,
     parse,
@@ -34,7 +38,8 @@ _DECISIONS = {
     "match_arm",
     "try_expression",
 }
-_PACKAGE_BLOCK = re.compile(r"(?ms)^\[package\](.*?)(?:^\[|\Z)")
+_PACKAGE_BLOCK = re.compile(r"(?ms)^\[package\].*?(?=^\[|\Z)")
+_SELF_TYPES = {"type_identifier", "generic_type", "scoped_type_identifier"}
 _NAME = re.compile(r'(?m)^name\s*=\s*"([^"]+)"')
 
 
@@ -48,19 +53,6 @@ def _skip(_node) -> bool:
 
 def _has_block(node) -> bool:
     return child_of_type(node, "block") is not None
-
-
-def _ancestor_mods(data: bytes, node) -> list[str]:
-    names: list[str] = []
-    current = node.parent
-    while current is not None:
-        if current.type == "mod_item":
-            ident = child_of_type(current, "identifier")
-            if ident is not None:
-                names.append(node_text(data, ident))
-        current = current.parent
-    names.reverse()
-    return names
 
 
 def _cfg_items(tree) -> list[list]:
@@ -145,107 +137,71 @@ def _in_test_code(data: bytes, node) -> bool:
 
 
 def _impl_type(data: bytes, impl) -> str | None:
-    saw_for = False
-    chosen = None
-    for child in impl.children:
-        if child.type == "for":
-            saw_for = True
-            chosen = None
-            continue
-        if child.type in {"type_identifier", "generic_type", "scoped_type_identifier"}:
-            if child.type == "type_identifier":
-                chosen = node_text(data, child)
-            else:
-                ident = child_of_type(child, "type_identifier")
-                if ident is None:
-                    for item in descendants(child):
-                        if item.type == "type_identifier":
-                            ident = item
-                            break
-                chosen = node_text(data, ident) if ident is not None else None
-            if saw_for:
-                return chosen
-    return chosen
+    """The self type of `impl Type` or `impl Trait for Type`, by its last path segment."""
+
+    node = impl.child_by_field_name("type")
+    if node is None or node.type not in _SELF_TYPES:
+        return None
+    return child_text(data, node, "type_identifier") or descendant_text(data, node, "type_identifier")
 
 
 def _crate_name(path: str) -> tuple[str, Path | None]:
-    current = Path(path).resolve().parent
-    while True:
-        cargo = current / "Cargo.toml"
-        if cargo.is_file():
-            text = cargo.read_text(encoding="utf-8")
-            block = _PACKAGE_BLOCK.search(text)
-            if block:
-                match = _NAME.search(block.group(1))
-                name = match.group(1) if match else current.name
-                return name.replace("-", "_"), current
-        if current.parent == current:
-            break
-        current = current.parent
+    for directory in Path(path).resolve().parents:
+        cargo = directory / "Cargo.toml"
+        if not cargo.is_file():
+            continue
+        block = _PACKAGE_BLOCK.search(cargo.read_text(encoding="utf-8"))
+        if block:
+            match = _NAME.search(block.group())
+            name = match.group(1) if match else directory.name
+            return name.replace("-", "_"), directory
     return "crate", None
+
+
+def _crate_relative(file_path: Path, crate_root: Path) -> list[str]:
+    """Module segments of a file below its crate root. `lib.rs`, `main.rs`, and `mod.rs` add none."""
+
+    relative = file_path.relative_to(crate_root).as_posix().removeprefix("src/")
+    if relative in {"lib.rs", "main.rs"}:
+        return []
+    *parts, name = relative.split("/")
+    if name != "mod.rs":
+        parts.append(name.removesuffix(".rs"))
+    return parts
 
 
 def _file_modules(path: str, crate_name: str, crate_root: Path | None) -> list[str]:
     file_path = Path(path).resolve()
     if crate_root is None:
-        return [crate_name, file_path.stem] if file_path.stem not in {"lib", "main"} else [crate_name]
-    try:
-        relative = file_path.relative_to(crate_root).as_posix()
-    except ValueError:
-        return [crate_name]
-    if relative.startswith("src/"):
-        relative = relative[4:]
-    if relative in {"lib.rs", "main.rs"}:
-        return [crate_name]
-    parts = relative.split("/")
-    if parts[-1] == "mod.rs":
-        parts = parts[:-1]
-    elif parts[-1].endswith(".rs"):
-        parts[-1] = parts[-1][:-3]
+        return [crate_name] if file_path.stem in {"lib", "main"} else [crate_name, file_path.stem]
+    parts = _crate_relative(file_path, crate_root)
     if parts[:1] == ["bin"] and len(parts) >= 2:
         return parts[1:]
     return [crate_name, *parts]
 
 
 def _namespace(modules: list[str], extra: list[str], type_name: str | None) -> str:
-    parts = [*modules, *extra]
-    if type_name:
-        parts.append(type_name)
+    parts = [*modules, *extra, type_name]
     return "::".join(part for part in parts if part)
-
-
-def _absolute(path: str, project_root: str | None) -> str:
-    file_path = Path(path)
-    if file_path.is_absolute():
-        return str(file_path)
-    if project_root:
-        return str((Path(project_root) / file_path).resolve())
-    return str(file_path.resolve())
 
 
 def _impl_owner(data: bytes, node):
     parent = node.parent
-    if parent is None or parent.type != "declaration_list":
+    if parent.type != "declaration_list" or parent.parent.type != "impl_item":
         return None
-    owner = parent.parent
-    if owner is None or owner.type != "impl_item":
-        return None
-    return _impl_type(data, owner)
+    return _impl_type(data, parent.parent)
 
 
 def _record_function(data: bytes, node, modules: list[str], path: str) -> Function | None:
-    if node.type != "function_item" or not _has_block(node):
-        return None
-    if node.parent is not None and node.parent.type == "block":
-        return None
-    if _in_test_code(data, node):
+    if node.type != "function_item" or not _has_block(node) or node.parent.type == "block":
         return None
     ident = child_of_type(node, "identifier")
-    if ident is None:
+    if ident is None or _in_test_code(data, node):
         return None
+    mods = enclosing_names(data, node, {"mod_item"}, "identifier")
     return Function(
         name=node_text(data, ident),
-        namespace=_namespace(modules, _ancestor_mods(data, node), _impl_owner(data, node)),
+        namespace=_namespace(modules, mods, _impl_owner(data, node)),
         complexity=complexity(node, _is_decision, _skip),
         start_line=start_line(node),
         end_line=end_line(node),
@@ -258,7 +214,7 @@ def functions_in_source(
     source: str, path: str, project_root: str | None = None
 ) -> list[Function]:
     data, tree = parse(source, "rust")
-    located = _absolute(path, project_root)
+    located = absolute_path(path, project_root)
     crate_name, crate_root = _crate_name(located)
     modules = _file_modules(located, crate_name, crate_root)
     found: list[Function] = []

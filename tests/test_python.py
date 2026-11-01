@@ -103,3 +103,10 @@ def literal():
     assert [(fn.namespace, fn.name, fn.complexity) for fn in functions] == [
         ("demo", "literal", 1)
     ]
+
+
+def test_source_root_is_stripped_without_a_src_directory():
+    source = "def run():\n    return 1\n"
+    assert functions_in_source(source, "/proj/app/main.py", "/proj")[0].namespace == "app.main"
+    assert functions_in_source(source, "/proj/app/main.py", "/proj/")[0].namespace == "app.main"
+    assert functions_in_source(source, "./app/main.py", ".")[0].namespace == "app.main"

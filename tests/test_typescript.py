@@ -51,3 +51,10 @@ export function View(ok: boolean, ready: boolean) {
     assert [(fn.namespace, fn.name, fn.complexity) for fn in functions] == [
         ("ui.view", "View", 3)
     ]
+
+
+def test_source_root_is_stripped_without_a_src_directory():
+    source = "export function view() { return 1 }\n"
+    assert functions_in_source(source, "/proj/ui/view.tsx", "/proj")[0].namespace == "ui.view"
+    assert functions_in_source(source, "/proj/ui/view.cts", "/proj/")[0].namespace == "ui.view"
+    assert functions_in_source(source, "./ui/view.ts", ".")[0].namespace == "ui.view"

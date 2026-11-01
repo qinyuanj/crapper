@@ -158,3 +158,60 @@ def test_a_crate_named_tests_is_not_test_code(tmp_path):
     _write_manifest(tmp_path, "tests")
     functions = functions_in_source("pub fn run() {}\n", str(tmp_path / "src" / "lib.rs"), str(tmp_path))
     assert [fn.name for fn in functions] == ["run"]
+
+
+def _crate(tmp_path):
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "demo"\nversion = "0.1.0"\n\n[dependencies]\nname = "other"\n',
+        encoding="utf-8",
+    )
+    return str(tmp_path / "src" / "lib.rs")
+
+
+def test_impl_namespace_is_the_self_type_name(tmp_path):
+    path = _crate(tmp_path)
+    source = (
+        "impl<T> Widget<T> { fn a(&self) {} }\n"
+        "impl<T> ui::Panel<T> { fn b(&self) {} }\n"
+        "impl ui::Frame { fn c(&self) {} }\n"
+        "impl<T> Trait for Vec<crate::Sample> { fn d(&self) {} }\n"
+        "impl Trait for &Widget { fn e(&self) {} }\n"
+        "impl union<i32> { fn f(&self) {} }\n"
+        "impl From<W> for default<u8> { fn g(&self) {} }\n"
+    )
+    found = [(fn.namespace, fn.name) for fn in functions_in_source(source, path, str(tmp_path))]
+    assert found == [
+        ("demo::Widget", "a"),
+        ("demo::Panel", "b"),
+        ("demo::Frame", "c"),
+        ("demo::Vec", "d"),
+        ("demo", "e"),
+        ("demo", "f"),
+        ("demo", "g"),
+    ]
+
+
+def test_mod_rs_is_named_after_its_directory(tmp_path):
+    _crate(tmp_path)
+    found = functions_in_source("pub fn open() {}\n", str(tmp_path / "src" / "game" / "mod.rs"), str(tmp_path))
+    assert found[0].namespace == "demo::game"
+    nested = functions_in_source("pub fn open() {}\n", str(tmp_path / "src" / "game" / "board" / "mod.rs"), None)
+    assert nested[0].namespace == "demo::game::board"
+
+
+def test_bin_needs_a_file_below_it_to_name_a_binary(tmp_path):
+    _crate(tmp_path)
+    source = "pub fn open() {}\n"
+    layouts = {
+        "src/bin.rs": "demo::bin",
+        "src/bin/mod.rs": "demo::bin",
+        "src/bin/tool/mod.rs": "tool",
+        "src/lib/mod.rs": "demo::lib",
+        "src/mod.rs": "demo",
+        "src/main.rs": "demo",
+    }
+    found = {
+        relative: functions_in_source(source, str(tmp_path / relative), None)[0].namespace
+        for relative in layouts
+    }
+    assert found == layouts

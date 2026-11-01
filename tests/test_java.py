@@ -132,3 +132,7 @@ def test_keywords_in_comments_and_strings_are_not_decisions():
     """
     methods = functions_in_source(source, "Sample.java")
     assert [(method.name, method.complexity) for method in methods] == [("stable", 1)]
+
+
+def test_a_method_outside_any_type_is_ignored():
+    assert functions_in_source("int score() { return 1; }\n", "Loose.java") == []

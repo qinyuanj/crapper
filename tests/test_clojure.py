@@ -3,6 +3,7 @@ from crapper.languages.clojure import (
     extract_functions,
     functions_in_source,
     namespace_from_path,
+    without_strings_and_comments,
 )
 
 
@@ -104,3 +105,64 @@ def test_strings_comments_and_character_literals_stay_inside_one_form():
 def test_character_literals_do_not_swallow_the_next_defn():
     source = '(def x #{\\"})\n(defn foo [] 1)'
     assert [item["name"] for item in extract_functions(source)] == ["foo"]
+
+
+def test_empty_and_escaped_strings_close_before_the_next_decision():
+    assert cyclomatic_complexity('(defn foo [x] "" (if x 1 0))') == 2
+    assert cyclomatic_complexity('(defn foo [x] "\\"" (if x 1 0))') == 2
+    assert cyclomatic_complexity('(defn foo [x] "\\\\" (if x 1 0))') == 2
+
+
+def test_clauses_are_counted_per_form():
+    assert cyclomatic_complexity("(defn foo [x] (cond (a? x) 1 (b? x) 2))") == 3
+    assert cyclomatic_complexity("(defn foo [x] (case x () :empty [1] :one :other))") == 4
+    assert cyclomatic_complexity("(defn foo [x] (cond))") == 1
+    assert cyclomatic_complexity("(defn foo [x] (some-> x))") == 1
+
+
+def test_an_unfinished_cond_counts_the_clauses_it_has():
+    assert cyclomatic_complexity("(defn foo [x] (cond a b") == 2
+
+
+def test_top_level_comments_and_strings_keep_line_numbers():
+    source = (
+        ";; (defn hidden [])\n"
+        '(def s "a\nb")\n'
+        '(def t "")\n'
+        '"(defn fake [])"\n'
+        "(defn foo [x]\n"
+        "  (inc x)\n"
+        "  x)\n"
+        ";; trailing"
+    )
+    found = [(item["name"], item["start_line"], item["end_line"]) for item in extract_functions(source)]
+    assert found == [("foo", 6, 8)]
+
+
+def test_a_stray_closing_paren_does_not_swallow_the_next_defn():
+    assert [item["name"] for item in extract_functions(")\n(defn bar [] 1)")] == ["bar"]
+
+
+def test_character_literals_end_at_a_delimiter():
+    source = "(def c [\\a \\( \\space])\n(defn foo [] \\x)\n(defn bar [] 1)"
+    assert [item["name"] for item in extract_functions(source)] == ["foo", "bar"]
+
+
+def test_namespace_strips_the_source_root_without_a_src_directory():
+    assert namespace_from_path("/proj/demo/core.clj", "/proj") == "demo.core"
+    assert namespace_from_path("/proj/demo/core.clj", "/proj/") == "demo.core"
+    assert namespace_from_path("demo/core.clj", ".") == "demo.core"
+
+
+def test_blanked_strings_keep_their_length_and_newlines():
+    assert without_strings_and_comments('(f "ab\nc" x) ; done') == '(f "  \n " x) '
+
+
+def test_odd_cond_and_even_case_clause_counts():
+    assert cyclomatic_complexity("(defn foo [x] (cond a b c))") == 2
+    assert cyclomatic_complexity("(defn foo [x] (case x 1 :one))") == 2
+
+
+def test_a_character_literal_stops_at_a_newline():
+    source = "(def c [\\a\n])\n(defn foo [] 1)"
+    assert [(item["name"], item["start_line"]) for item in extract_functions(source)] == [("foo", 3)]

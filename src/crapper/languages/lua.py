@@ -17,11 +17,13 @@ from functools import cache
 from tree_sitter import Query, QueryCursor
 
 from crapper.languages.treesitter import (
+    child_of_type,
     end_line,
     node_text,
     parse,
     parser_for,
     start_line,
+    strip_root,
 )
 from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
@@ -47,10 +49,7 @@ def _query() -> Query:
 
 
 def _relative(path: str, project_root: str | None) -> str:
-    relative = path.replace("\\", "/")
-    root = (project_root or "").replace("\\", "/").rstrip("/")
-    if root and root != "." and relative.startswith(root + "/"):
-        relative = relative[len(root) + 1 :]
+    relative = strip_root(path.replace("\\", "/"), project_root)
     while relative.startswith("./"):
         relative = relative[2:]
     return relative
@@ -103,19 +102,17 @@ def _assigned_name(data: bytes, node):
     """The target of `name = function ... end`, or None for an unbound closure."""
 
     values = node.parent
-    if values is None or values.type != "expression_list":
+    statement = values.parent
+    if values.type != "expression_list":
         return None
-    assignment = values.parent
-    if assignment is None or assignment.type != "assignment_statement":
+    if statement is None or statement.type != "assignment_statement":
         return None
-    targets = [child for child in assignment.children if child.type == "variable_list"]
-    if not targets:
+    targets = child_of_type(statement, "variable_list")
+    if targets is None:
         return None
+    names = targets.named_children
     index = values.named_children.index(node)
-    names = targets[0].named_children
-    if index >= len(names):
-        return None
-    return node_text(data, names[index])
+    return node_text(data, names[index]) if index < len(names) else None
 
 
 def _declaration_start(node):
