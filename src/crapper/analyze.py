@@ -10,6 +10,7 @@ from crapper.crap import make_entry, sort_entries
 from crapper.discover import language_of
 from crapper.languages import functions_in_file
 from crapper.model import Entry, Function
+from crapper.platform import POOL_START_METHOD
 
 # Below this many files a process pool costs more than it saves.
 PARALLEL_MIN_FILES = 64
@@ -35,8 +36,7 @@ def _functions_by_file(files: list[Path], root: Path) -> list[list[Function]]:
     workers = os.cpu_count() or 1
     if len(files) < _parallel_min_files() or workers < 2:
         return [_functions(file, root) for file in files]
-    # Forked workers inherit the loaded parsers instead of importing them again.
-    with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("fork")) as pool:
+    with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context(POOL_START_METHOD)) as pool:
         chunk = max(1, len(files) // (workers * 4))
         return list(pool.map(_functions, files, [root] * len(files), chunksize=chunk))
 

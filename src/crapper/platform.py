@@ -10,6 +10,10 @@ import sys
 
 WINDOWS = sys.platform == "win32"
 
+# Forked workers inherit the loaded parsers instead of importing them again.
+# Windows has no fork, so its workers start fresh and load parsers themselves.
+POOL_START_METHOD = "spawn" if WINDOWS else "fork"
+
 # Windows 10 22H2. Older builds are refused before any work.
 MINIMUM_WINDOWS_BUILD = 19045
 
