@@ -19,6 +19,7 @@ from crapper.discover import (
     under_roots,
 )
 from crapper.metrics import metrics_path, write_metrics
+from crapper.platform import refusal, windows_build
 from crapper.report import format_report
 from crapper.runners import CoverageError, run_coverage
 
@@ -288,18 +289,10 @@ def select_files(options: Options) -> list[Path]:
     return sorted({path.resolve() for path in files}, key=lambda path: path.as_posix())
 
 
-UNSUPPORTED_PLATFORM = (
-    "crapper does not support native Windows. Run it inside WSL2 with the "
-    "project under ~/; see the README."
-)
-
-
 def platform_warning(platform: str, root: Path) -> str | None:
-    """Refuse native Windows; suggest the Linux filesystem under WSL2."""
+    """Suggest the Linux filesystem for Windows-mounted projects under WSL2."""
 
-    if platform == "win32":
-        return UNSUPPORTED_PLATFORM
-    if root.as_posix().startswith("/mnt/"):
+    if platform != "win32" and root.as_posix().startswith("/mnt/"):
         return (
             f"{root} is on a Windows drive. Under WSL2, clone the project under ~/ "
             "for speed and working symlinks."
@@ -322,12 +315,14 @@ def run(argv: list[str] | None = None) -> int:
         print(options.message, file=stream, end="" if options.message.endswith("\n") else "\n")
         return options.exit_code
 
+    refused = refusal(sys.platform, windows_build())
+    if refused:
+        print(refused, file=sys.stderr)
+        return 1
     root = options.project_root.resolve()
     warning = platform_warning(sys.platform, root)
     if warning:
         print(warning, file=sys.stderr)
-    if sys.platform == "win32":
-        return 1
     try:
         files = select_files(options)
     except (OSError, ValueError) as exc:
