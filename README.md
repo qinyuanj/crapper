@@ -259,9 +259,12 @@ LF. `--exclude` patterns accept `/` or `\`.
 Limits:
 
 - Coverage tools run as native processes with literal arguments, found
-  through `PATHEXT` (`npm.cmd`, `mvn.cmd`). Each command's process tree runs
-  in a Job Object, so Ctrl+C, or crapper being killed, ends every process it
-  started.
+  through `PATHEXT`, including explicit extensionless launcher paths. Known
+  npm/npx and installed Vitest shims use their native Node entry points when
+  available; other batch launchers preserve literal argv through ordinary
+  `%*` forwarding. Each command's process tree runs in a Job Object, so leader
+  completion, timeout, Ctrl+C, or crapper being killed ends its descendants.
+  Parallel Lua coverage polls for interruption and waits for shard cleanup.
 - `--coverage-command` runs in `cmd.exe`, so write it in cmd syntax.
 - The Clojure CLI's Windows install is a PowerShell module with no `clj`
   executable, so built-in Clojure coverage reports `clj is not on PATH`. Use

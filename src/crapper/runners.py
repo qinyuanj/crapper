@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from pathlib import Path
 
 from crapper.coverage import CoverageBundle, load_bundle, read_fresh_lcov
@@ -759,8 +760,39 @@ def _run_lua_shards(lua: str, module: Path, report: Path, selected: list[Path],
             commands.append(lua_coverage_commands(lua, config)[0] + group)
         _warn(f"+ ({module}) Busted in {len(groups)} coverage shards: "
               f"{shlex.join(lcov_cmd[:1])} -e '<busted runner>' -- busted …")
-        with ThreadPoolExecutor(len(commands)) as pool:
-            results = list(pool.map(lambda command: run_captured(command, module), commands))
+        stop, finished = threading.Event(), threading.Event()
+        results, errors = [], []
+
+        def execute(command):
+            if stop.is_set():
+                return None
+            with platform.cancellable(stop):
+                return run_captured(command, module)
+
+        def collect():
+            try:
+                with ThreadPoolExecutor(len(commands)) as pool:
+                    results.extend(pool.map(execute, commands))
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                finished.set()
+
+        # Only this coordinator waits on the pool. The main thread polls an
+        # Event, avoiding Windows' uninterruptible locks and interrupted-join
+        # bookkeeping (bpo-45274). Its completion includes pool shutdown.
+        coordinator = threading.Thread(target=collect, name="crapper-coverage")
+        try:
+            coordinator.start()
+            while not finished.wait(0.2):
+                pass
+        except BaseException:
+            stop.set()
+            while not finished.wait(0.2):
+                pass
+            raise
+        if errors:
+            raise errors[0]
         for completed in results:
             sys.stdout.write(completed.stdout)
             sys.stderr.write(completed.stderr)

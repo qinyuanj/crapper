@@ -290,6 +290,51 @@ def _stub_sharded_lua(monkeypatch, failing_spec):
     return shell
 
 
+@pytest.mark.skipif(os.name != "nt", reason="main-thread interrupt polling is a Windows behavior")
+def test_sharded_coverage_interrupts_promptly_and_joins_its_workers(tmp_path, monkeypatch):
+    import _thread
+    import threading
+    import time
+    from crapper import platform, runners
+
+    monkeypatch.setattr(runners, "lua_interpreter", lambda: "lua")
+    monkeypatch.setattr(runners, "lua_cluacov_version", lambda lua: "1.0.0")
+    monkeypatch.setattr(runners, "run_shell", lambda *args: 0)
+
+    def captured(command, cwd):
+        if command[2] == runners._BUSTED_SPECS:
+            return subprocess.CompletedProcess(command, 0, "spec/a_spec.lua\nspec/b_spec.lua\n", "")
+        import sys
+        script = (
+            "import os, subprocess, sys, time; from pathlib import Path; "
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+            "Path(sys.argv[1]).write_text(str(os.getpid()) + ',' + str(p.pid)); time.sleep(4)"
+        )
+        marker = str(tmp_path / (Path(command[-1]).stem + '.pids'))
+        return platform.run([sys.executable, '-c', script, marker], cwd, capture=True)
+
+    def interrupt_after_both_started():
+        deadline = time.monotonic() + 3
+        while len(list(tmp_path.glob('*.pids'))) != 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        _thread.interrupt_main()
+
+    monkeypatch.setattr(runners, "run_captured", captured)
+    threads = set(threading.enumerate())
+    interrupter = threading.Thread(target=interrupt_after_both_started)
+    interrupter.start()
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        run_coverage(tmp_path, [_write(tmp_path, "src/a.lua", "return 1\n")], None, lua_shards=2)
+    interrupter.join()
+    assert time.monotonic() - started < 2
+    from test_process_tree import _ends_within
+    markers = list(tmp_path.glob('*.pids'))
+    assert len(markers) == 2
+    assert all(_ends_within(int(pid), 2) for marker in markers for pid in marker.read_text().split(','))
+    assert set(threading.enumerate()) == threads
+
+
 def test_one_failing_coverage_shard_fails_the_run_and_leaves_no_artifacts(tmp_path, monkeypatch):
     shell = _stub_sharded_lua(monkeypatch, "spec/b_spec.lua")
     source = _write(tmp_path, "src/a.lua", "return 1\n")
