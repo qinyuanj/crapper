@@ -1,12 +1,12 @@
 """Coverage lifecycle acceptance tests through the real CLI process."""
 
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from host_shell import shell_command
 
 from crapper.runners import lua_interpreter
 
@@ -30,10 +30,6 @@ def cli(root, *args, env=None):
         [sys.executable, "-m", "crapper", "--root", str(root), *args],
         capture_output=True, text=True, env=environment,
     )
-
-
-def shell_command(argv):
-    return shlex.join(argv)
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -287,8 +283,20 @@ def test_custom_report_native_case_equivalence(tmp_path, duplicate):
                    "p = Path('coverage/lcov.info'); p.parent.mkdir(exist_ok=True)\n"
                    f"p.write_text({record!r})\n")
     result = cli(project, "--coverage-command", shell_command([sys.executable, str(script)]))
+    _assert_native_case(project, source, duplicate, result, previous)
+
+
+def _assert_native_case(project, source, duplicate, result, previous):
+    """A case variant names the source only where the filesystem folds case, as NTFS does."""
+
+    if Path(str(source).upper()).exists() and not duplicate:
+        assert result.returncode == 0, result.stderr
+        assert ":coverage 100.0" in (project / ".metrics/crap.edn").read_text()
+        return
     assert result.returncode == 1, result.stderr
     assert (project / ".metrics/crap.edn").read_bytes() == previous
+    if Path(str(source).upper()).exists():
+        assert "duplicate LCOV source" in result.stderr
 
 
 @pytest.mark.skipif(lua_interpreter() is None, reason="Lua 5.4 is not installed")
@@ -296,7 +304,7 @@ def test_custom_report_native_case_equivalence(tmp_path, duplicate):
 def test_builtin_lua_report_native_case_equivalence(tmp_path, duplicate):
     project = tmp_path / "builtin case project with spaces"
     write(project, ".busted", "return {default = {lpath = 'src/?.lua'}}")
-    write(project, "src/calc.lua", "local M = {}; function M.value() return 42 end; return M\n")
+    source = write(project, "src/calc.lua", "local M = {}; function M.value() return 42 end; return M\n")
     write(project, "spec/calc_spec.lua", "describe('calc', function() it('passes', function() "
           "assert.equals(42, require('calc').value()) end) end)\n")
     record = "SF:SRC/CALC.LUA\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
@@ -311,8 +319,7 @@ def test_builtin_lua_report_native_case_equivalence(tmp_path, duplicate):
           f"f:write({literal}); f:close() end}}\n")
     previous = write(project, ".metrics/crap.edn", "previous snapshot\n").read_bytes()
     result = cli(project)
-    assert result.returncode == 1, result.stderr
-    assert (project / ".metrics/crap.edn").read_bytes() == previous
+    _assert_native_case(project, source, duplicate, result, previous)
 
 
 @pytest.mark.parametrize("outcome", ["failed", "missing", "malformed", "valid"])

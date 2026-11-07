@@ -4,13 +4,23 @@ import re
 from pathlib import Path
 
 import pytest
+from host_shell import chain, python
 
 from crapper.runners import CoverageError, _clean_clojure, run_coverage, stale_files
 
 STAMP = Path("target/coverage/crapper-stamp.json")
 # A custom command must leave a valid coverage/lcov.info with at least one record.
 # Both files live in coverage/, which the fingerprint skips.
-OK = "mkdir -p coverage && : > coverage/x && printf 'SF:coverage/x\\nLF:0\\nLH:0\\nend_of_record\\n' > coverage/lcov.info"
+OK = python("from pathlib import Path; d = Path('coverage'); d.mkdir(exist_ok=True); "
+            "(d / 'x').write_bytes(b''); "
+            "(d / 'lcov.info').write_bytes(b'SF:coverage/x\\nLF:0\\nLH:0\\nend_of_record\\n')")
+
+
+def _append(name: str, text: str = "x\\n") -> str:
+    """A command that appends `text` to `name`, creating its directory."""
+
+    return python(f"from pathlib import Path; p = Path('{name}'); p.parent.mkdir(parents=True, exist_ok=True); "
+                  f"p.open('a').write('{text}')")
 
 
 def _failed(root: Path, files: list[Path], command: str | None = None) -> list[str]:
@@ -208,9 +218,10 @@ def test_a_custom_command_records_every_language_it_was_given(tmp_path):
 def test_a_new_command_discards_entries_recorded_for_the_old_one(tmp_path):
     first, second = _write(tmp_path, "a.py"), _write(tmp_path, "b.go")
     run_coverage(tmp_path, [first], OK)
-    run_coverage(tmp_path, [second], f"{OK}; : other")
+    other = chain(OK, python("'other'"))
+    run_coverage(tmp_path, [second], other)
     stamp = json.loads((tmp_path / STAMP).read_text(encoding="utf-8"))
-    assert stamp["command"] == f"{OK}; : other"
+    assert stamp["command"] == other
     assert sorted(stamp["languages"]) == ["go"]
 
 
@@ -326,20 +337,20 @@ def test_clojure_cleanup_keeps_the_stamp(tmp_path):
     assert stamp.is_file()
 
 
-def test_a_dangling_symlink_does_not_break_the_fingerprint(tmp_path):
+def test_a_dangling_symlink_does_not_break_the_fingerprint(tmp_path, symlink):
     source = _write(tmp_path, "a.py")
-    (tmp_path / "dangling").symlink_to(tmp_path / "missing")
+    symlink(tmp_path / "dangling", tmp_path / "missing")
     assert _failed(tmp_path, [source], OK) == []
     assert stale_files(tmp_path, [source], OK) == []
     (tmp_path / "dangling").unlink()
-    (tmp_path / "dangling").symlink_to(source)
+    symlink(tmp_path / "dangling", source)
     assert stale_files(tmp_path, [source], OK) == [source]
 
 
 def test_a_file_edited_while_coverage_runs_is_not_stamped(tmp_path, capsys):
     source = _write(tmp_path, "src/a.py")
     _write(tmp_path, "tests/test_a.py")
-    command = f"{OK}; echo more >> tests/test_a.py"
+    command = chain(OK, _append("tests/test_a.py", "more\\n"))
     assert _failed(tmp_path, [source], command) == []
     assert "Files changed while coverage ran" in capsys.readouterr().err
     assert stale_files(tmp_path, [source], command) == [source]
@@ -348,7 +359,8 @@ def test_a_file_edited_while_coverage_runs_is_not_stamped(tmp_path, capsys):
 
 def test_an_edit_during_a_run_drops_the_entries_that_run_replaced(tmp_path):
     first, second = _write(tmp_path, "a.py"), _write(tmp_path, "b.go")
-    command = f"{OK}; test -f go.edit && echo x >> b.go; :"
+    command = chain(OK, python("from pathlib import Path; "
+                               "Path('go.edit').exists() and Path('b.go').open('a').write('x\\n')"))
     run_coverage(tmp_path, [first, second], command)
     _write(tmp_path, "go.edit")
     run_coverage(tmp_path, [second], command)
@@ -385,7 +397,7 @@ def test_tool_caches_do_not_make_coverage_stale(tmp_path):
 
 def test_tool_caches_written_by_the_coverage_run_still_stamp(tmp_path):
     source = _write(tmp_path, "src/a.py")
-    command = "; ".join([OK, *(f"mkdir -p {Path(name).parent} && date >> {name}" for name in CACHES)])
+    command = chain(OK, *(_append(name) for name in CACHES))
     assert _failed(tmp_path, [source], command) == []
     assert stale_files(tmp_path, [source], command) == []
     assert _failed(tmp_path, [source], command) == []
