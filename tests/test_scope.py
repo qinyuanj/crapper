@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -52,17 +53,19 @@ def test_a_subdirectory_root_sees_only_its_own_files(tmp_path, git):
 
 def test_names_git_would_quote_come_back_verbatim(tmp_path, git):
     git(tmp_path, "init", "-q")
-    names = ["sp ace.py", 'quo"te.py', "new\nline.py", "ünï.py", "tab\there.py"]
+    names = ["sp ace.py", "ünï.py", "sémi;colon.py"]
+    if os.name != "nt":  # Windows forbids these characters in file names.
+        names += ['quo"te.py', "new\nline.py", "tab\there.py"]
     expected = sorted((_write(tmp_path, name) for name in names), key=Path.as_posix)
     assert changed_files(tmp_path) == expected
 
 
-def test_a_symlink_leading_outside_the_root_is_not_returned(tmp_path, git):
+def test_a_symlink_leading_outside_the_root_is_not_returned(tmp_path, git, symlink):
     project = tmp_path / "project"
     project.mkdir()
     git(project, "init", "-q")
     outside = _write(tmp_path, "outside.py")
-    (project / "link.py").symlink_to(outside)
+    symlink(project / "link.py", outside)
     kept = _write(project, "kept.py")
     assert changed_files(project) == [kept]
 
@@ -151,11 +154,11 @@ def test_any_matching_pattern_excludes_and_outside_paths_never_do(tmp_path):
     assert excluded(tmp_path.parent / "a/x.py", tmp_path, ["**"]) is False
 
 
-def test_excluded_paths_are_compared_after_resolving_both_sides(tmp_path):
+def test_excluded_paths_are_compared_after_resolving_both_sides(tmp_path, symlink):
     real = tmp_path / "real"
     (real / "gen").mkdir(parents=True)
     linked = tmp_path / "linked"
-    linked.symlink_to(real)
+    symlink(linked, real)
     assert excluded(real / "gen/a.py", linked, ["gen"]) is True
     assert excluded(linked / "gen/a.py", real, ["gen"]) is True
 
@@ -187,11 +190,11 @@ def test_under_roots_keeps_files_inside_any_root_in_order(tmp_path):
     assert under_roots(files, []) == []
 
 
-def test_under_roots_compares_after_resolving_both_sides(tmp_path):
+def test_under_roots_compares_after_resolving_both_sides(tmp_path, symlink):
     real = tmp_path / "real"
     (real / "src").mkdir(parents=True)
     linked = tmp_path / "linked"
-    linked.symlink_to(real)
+    symlink(linked, real)
     assert under_roots([real / "src/a.py"], [linked / "src"]) == [real / "src/a.py"]
     assert under_roots([linked / "src/a.py"], [real / "src" / ".." / "src"]) == [linked / "src/a.py"]
 

@@ -5,6 +5,7 @@ That would delete `target/coverage` and recurse into this suite.
 """
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,26 @@ import pytest
 @pytest.fixture(autouse=True)
 def do_not_launch_project_coverage(monkeypatch):
     monkeypatch.setattr("crapper.cli.run_coverage", lambda *_args, **_kwargs: None)
+
+
+@pytest.fixture
+def symlink():
+    """Create `link` pointing at `target`, or skip where this process may not.
+
+    Windows needs Developer Mode or SeCreateSymbolicLinkPrivilege (error 1314
+    without it), and must be told a link names a directory.
+    """
+
+    def make(link: Path, target: Path) -> Path:
+        try:
+            link.symlink_to(target, target_is_directory=target.is_dir())
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("this process may not create symlinks; enable Windows Developer Mode")
+            raise
+        return link
+
+    return make
 
 
 @pytest.fixture
