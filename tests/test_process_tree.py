@@ -6,6 +6,7 @@ a Job Object and ends the job when the run is interrupted or crapper dies.
 """
 
 import _thread
+import json
 import os
 import subprocess
 import sys
@@ -67,6 +68,72 @@ def test_ctrl_c_during_a_command_ends_its_whole_process_tree(tmp_path):
     # The command would sleep 60 s and the grandchild 600 s; the interrupt must not wait for either.
     assert time.monotonic() - started < 30
     assert _ends_within(_pid(pid_file), 10)
+
+
+def test_batch_arguments_are_literal_through_npm_style_percent_star(tmp_path):
+    from crapper.platform import run
+
+    batch = tmp_path / 'probe.cmd'
+    batch.write_bytes(
+        b'@echo off\r\n'
+        b'node -e "console.log(JSON.stringify(process.argv.slice(1)))" %*\r\n')
+    argument = '%SPEC_LITERAL_ARG%'
+    result = run([str(batch), argument], tmp_path, capture=True,
+                 env={**os.environ, 'SPEC_LITERAL_ARG': 'expanded'})
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == [argument]
+
+
+def test_batch_arguments_are_literal_in_an_argv_command(tmp_path):
+    from crapper.platform import run
+
+    batch = tmp_path / 'probe.cmd'
+    batch.write_bytes(b'@echo off\r\nsetlocal\r\necho [%1]\r\n')
+    result = run([str(batch), '%SPEC_LITERAL_ARG%'], tmp_path, capture=True,
+                 env={**os.environ, 'SPEC_LITERAL_ARG': 'expanded'})
+    assert result.returncode == 0
+    assert result.stdout == '[%SPEC_LITERAL_ARG%]\n'
+
+
+def test_extensionless_explicit_batch_path_uses_its_launcher(tmp_path):
+    from crapper.platform import run
+
+    batch = tmp_path / 'probe.cmd'
+    batch.write_bytes(b'@echo off\r\nexit /b 0\r\n')
+    assert run([str(tmp_path / 'probe')], tmp_path, capture=True).returncode == 0
+
+
+def test_captured_output_returns_at_leader_exit_with_inherited_pipes(tmp_path):
+    from crapper.platform import run
+
+    script = (
+        "import subprocess, sys; "
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)']); "
+        "open('grandchild.pid', 'w').write(str(p.pid)); "
+        "print('leader output', flush=True); print('leader error', file=sys.stderr, flush=True)"
+    )
+    started = time.monotonic()
+    result = run([sys.executable, '-c', script], tmp_path, capture=True)
+    assert time.monotonic() - started < 2
+    assert result.returncode == 0
+    assert result.stdout == 'leader output\n'
+    assert result.stderr == 'leader error\n'
+    assert _ends_within(_pid(tmp_path / 'grandchild.pid'), 2)
+
+
+def test_captured_interrupt_ends_descendants_and_drains_output(tmp_path):
+    from crapper.platform import run
+
+    def interrupt_once_started():
+        _pid(tmp_path / 'grandchild.pid')
+        _thread.interrupt_main()
+
+    threading.Thread(target=interrupt_once_started, daemon=True).start()
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        run(SPAWNER, tmp_path, capture=True)
+    assert time.monotonic() - started < 2
+    assert _ends_within(_pid(tmp_path / 'grandchild.pid'), 2)
 
 
 def test_a_killed_crapper_takes_its_coverage_processes_with_it(tmp_path):

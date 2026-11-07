@@ -75,17 +75,25 @@ def lf_streams() -> None:
 
 
 def resolve(argv: list[str]) -> list[str]:
-    """argv with its program found on PATH the way the shell would.
+    """Resolve argv's program, including explicit extensionless Windows paths."""
 
-    CreateProcess only appends `.exe`, so on Windows `npm`, `npx` and `mvn`
-    (`.cmd` launchers) are looked up through PATHEXT first. A `.cmd`/`.bat`
-    program still parses its own arguments with cmd.exe rules; crapper only
-    passes it generated paths and flags.
-    """
-
-    if WINDOWS and argv and not os.path.dirname(argv[0]):
-        return [shutil.which(argv[0]) or argv[0], *argv[1:]]
-    return argv
+    if not WINDOWS or not argv:
+        return argv
+    program = argv[0]
+    if os.path.dirname(program):
+        if not Path(program).is_file() and not Path(program).suffix:
+            for extension in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";"):
+                if (candidate := Path(program + extension.lower())).is_file():
+                    program = str(candidate)
+                    break
+    else:
+        program = shutil.which(program) or program
+    if Path(program).suffix.lower() in (".cmd", ".bat"):
+        # Python exposes batch files to cmd.exe twice: once on the command
+        # line and again through %*. Carets suppress variable substitution in
+        # both passes without changing the bytes the batch script receives.
+        return [program, *(argument.replace("%", "^%") for argument in argv[1:])]
+    return [program, *argv[1:]]
 
 
 def run(command: str | list[str], cwd: Path, capture: bool = False,
@@ -195,12 +203,16 @@ def _run_in_job(argv: str | list[str], options: dict) -> subprocess.CompletedPro
         process = subprocess.Popen(argv, creationflags=_CREATE_SUSPENDED, **options)
         try:
             job.adopt(process)
-            while True:
+            while process.poll() is None:
                 try:
-                    stdout, stderr = process.communicate(timeout=_POLL_SECONDS)
-                    break
+                    process.communicate(timeout=_POLL_SECONDS)
                 except subprocess.TimeoutExpired:
-                    continue
+                    pass
+            # Descendants may still hold our pipe handles after the leader exits.
+            # End their job before waiting for EOF; communicate retains everything
+            # already read by its reader threads across timeout calls.
+            job.close()
+            stdout, stderr = process.communicate()
         except BaseException:
             job.terminate()
             process.kill()
