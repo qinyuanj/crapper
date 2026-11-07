@@ -623,9 +623,11 @@ def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]
             "local r = require('luacov.runner'); local c = r.load_config(arg[1]); "
             # LuaCov retains slash variants as different keys, including zero-hit
             # selected files, and cluacov's hook keeps the `./` that LuaCov's own
-            # hook strips. Normalize before the reporter merges those keys.
-            "local real_name = r.real_name; "
+            # hook strips. Normalize before the reporter merges those keys. A
+            # Windows Lua names one file with both separators.
+            "local real_name = r.real_name; local windows = package.config:sub(1, 1) == string.char(92); "
             "r.real_name = function(name) name = real_name(name); "
+            "if windows then name = name:gsub(string.char(92), '/') end; "
             "return (name:gsub('^%./', '')) end; "
             "c.reporter = 'lcov'; r.run_report(c); os.exit(0)",
             "--", "luacov", str(config)]
