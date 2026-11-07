@@ -19,7 +19,7 @@ from crapper.discover import (
     under_roots,
 )
 from crapper.metrics import metrics_path, write_metrics
-from crapper.platform import refusal, windows_build
+from crapper.platform import lf_streams, refusal, windows_build
 from crapper.report import format_report
 from crapper.runners import CoverageError, run_coverage
 
@@ -370,4 +370,5 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
+    lf_streams()
     sys.exit(run(argv))

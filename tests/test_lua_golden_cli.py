@@ -45,6 +45,17 @@ def test_complexity_snapshot_matches_golden(tmp_path, parallel, eol):
     assert published(root) == (FIXTURES / "lua_golden.no-coverage.edn").read_bytes()
 
 
+def test_the_printed_report_ends_lines_with_lf(tmp_path):
+    root = project(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-m", "crapper", "--root", str(root), "--full-tree", "--no-coverage"],
+        capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count(b"\n") > 1
+    assert b"\r" not in result.stdout + result.stderr
+
+
 def _toolchain_ready() -> bool:
     lua = lua_interpreter()
     return lua is not None and lua_cluacov_version(lua) == "1.0.0"
