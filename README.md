@@ -13,7 +13,8 @@ CRAP = CC² × (1 − coverage)³ + CC
 ## Run
 
 ```bash
-./crapper
+./crapper          # Linux, WSL2
+crapper.cmd        # native Windows, from cmd or PowerShell
 ```
 
 The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
@@ -226,14 +227,50 @@ Built-in Lua enumerates every module's existing `target/coverage/lua[/<module-sl
 
 Fresh custom and Lua LCOV must contain at least one completed `SF` record, positive unique `DA` line numbers with nonnegative hit counts, and exactly one consistent `LF`/`LH` count per source. Optional DA MD5 checksums and standard function/branch metadata are accepted; counts may appear in either order. A completed `LF:0`/`LH:0` record is valid. Empty, incomplete, unreadable, duplicate-source, or malformed output fails with exit **1** before publication. Every `SF` must resolve to a readable regular file: relative custom paths resolve against `--root`, relative built-in Lua paths against that module's Busted working directory. Absolute paths and forward or backward separators work; source paths are never guessed from the report directory or suffix searches. Custom commands that change directories must emit absolute or project-relative source paths. Built-in Lua coverage uses canonical paths and ignores alternate stale Lua reports even in mixed-language projects.
 
-Custom command strings retain shell syntax and run from `--root` through `/bin/sh`. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
+Custom command strings retain shell syntax and run from `--root` through the host shell: `/bin/sh` on Linux, `cmd.exe` on native Windows. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
 
 A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their warning-and-N/A behavior, except under `--full-tree`.
 
-## WSL2
+## Native Windows
 
-Native Windows is not supported: crapper exits with status 1 and points at
-this section. Run it inside WSL2 with Ubuntu.
+crapper runs natively on Windows 11 and on Windows 10 22H2 (build 19045) or
+later. Older builds are refused before any work, with exit status 1 and the
+minimum build named. Use native Windows when the project's tests only pass
+in a native Windows process (Rust with the MSVC toolchain and `cfg(windows)`,
+Python calling Win32 APIs), or when WSL is unavailable; otherwise WSL2 below
+works as well.
+
+1. Install Python 3.11+ (`python` on PATH) and the coverage tools your
+   languages need: `cargo` (MSVC; crapper installs `cargo-llvm-cov`), Node.js,
+   Go, Maven, and for Lua, Lua 5.4 with LuaRocks, busted, luacov,
+   luacov-reporter-lcov and cluacov 1.0.0 (`luarocks --lua-version=5.4 install
+   cluacov 1.0.0-1`).
+2. From the project root, run `crapper.cmd` from this checkout. It creates `.venv\Scripts\` on
+   first use. A project's own `.venv\Scripts\python.exe` is used for its
+   Python coverage, as `.venv/bin/python` is on Linux.
+
+The snapshot is byte-for-byte the one Linux writes for the same project:
+module names use `.`/`::` with no drive letter or backslash, lines end with
+LF whatever `core.autocrlf` says, and the file is replaced atomically. If an
+editor holds the old snapshot open, publication retries for a few seconds,
+then fails and leaves it unchanged. The printed report also ends lines with
+LF. `--exclude` patterns accept `/` or `\`.
+
+Limits:
+
+- Coverage tools run as native processes with literal arguments, found
+  through `PATHEXT` (`npm.cmd`, `mvn.cmd`). Each command's process tree runs
+  in a Job Object, so Ctrl+C, or crapper being killed, ends every process it
+  started.
+- `--coverage-command` runs in `cmd.exe`, so write it in cmd syntax.
+- The Clojure CLI's Windows install is a PowerShell module with no `clj`
+  executable, so built-in Clojure coverage reports `clj is not on PATH`. Use
+  `--coverage-command` with a `clj.exe` or `bb` that writes
+  `coverage/lcov.info`.
+- Analysis of 64 or more files starts its worker processes fresh, since
+  Windows has no fork; results are the same, only slower to start.
+
+## WSL2
 
 1. In an administrator PowerShell, run `wsl --install` and reboot.
 2. Open Ubuntu and clone into the Linux home directory, not `/mnt/c`.
@@ -260,6 +297,9 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/python -m pytest
 ```
+
+On native Windows use `python -m venv .venv` and `.venv\Scripts\python`. Tests
+that need to create symlinks skip unless Developer Mode is on.
 
 `scripts/bench.py` times the three refresh modes on a copy of a project and compares each snapshot byte for byte with recorded references:
 

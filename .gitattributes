@@ -2,3 +2,4 @@
 # so a Windows checkout with core.autocrlf=true must not turn them into CRLF.
 *.edn text eol=lf
 tests/fixtures/** text eol=lf
+*.cmd text eol=crlf

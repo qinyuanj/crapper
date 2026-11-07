@@ -288,7 +288,8 @@ def test_missing_build_files_skip_that_language(tmp_path, monkeypatch):
 def test_run_shell_returns_the_child_status_and_reports_a_failed_start(tmp_path, monkeypatch, capsys):
     assert run_shell("exit 3", tmp_path) == 3
     assert run_shell(["crapper-no-such-program-5"], tmp_path) == 127
-    assert "failed to start" in capsys.readouterr().err
+    assert ("Coverage command failed to start: crapper-no-such-program-5 is not on PATH"
+            in capsys.readouterr().err)
 
 
 def test_argv_executes_interpreter_and_script_paths_with_spaces(tmp_path):

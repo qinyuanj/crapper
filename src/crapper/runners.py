@@ -46,6 +46,11 @@ def run_shell(command: str | list[str], cwd: Path) -> int:
     _warn(f"+ ({cwd}) {display}")
     try:
         completed = platform.run(command, cwd)
+    except FileNotFoundError as exc:
+        missing = command[0] if isinstance(command, list) and not shutil.which(command[0]) else None
+        _warn(f"Coverage command failed to start: {missing} is not on PATH" if missing
+              else f"Coverage command failed to start: {exc}")
+        return 127
     except OSError as exc:
         _warn(f"Coverage command failed to start: {exc}")
         return 127
