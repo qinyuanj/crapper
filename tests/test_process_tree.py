@@ -77,18 +77,19 @@ def test_batch_arguments_are_literal_through_npm_style_percent_star(tmp_path):
     batch.write_bytes(
         b'@echo off\r\n'
         b'node -e "console.log(JSON.stringify(process.argv.slice(1)))" %*\r\n')
-    argument = '%SPEC_LITERAL_ARG%'
-    result = run([str(batch), argument], tmp_path, capture=True,
+    arguments = ['%SPEC_LITERAL_ARG%', 'space here', 'a&b', 'a|b', 'a^b', 'a!b', '',
+                 'a"b', 'trail\\', 'quote" & percent%CD% | unicode中', 'slash\\"quote']
+    result = run([str(batch), *arguments], tmp_path, capture=True,
                  env={**os.environ, 'SPEC_LITERAL_ARG': 'expanded'})
     assert result.returncode == 0
-    assert json.loads(result.stdout) == [argument]
+    assert json.loads(result.stdout) == arguments
 
 
 def test_batch_arguments_are_literal_in_an_argv_command(tmp_path):
     from crapper.platform import run
 
     batch = tmp_path / 'probe.cmd'
-    batch.write_bytes(b'@echo off\r\nsetlocal\r\necho [%1]\r\n')
+    batch.write_bytes(b'@echo off\r\nsetlocal\r\necho [%~1]\r\n')
     result = run([str(batch), '%SPEC_LITERAL_ARG%'], tmp_path, capture=True,
                  env={**os.environ, 'SPEC_LITERAL_ARG': 'expanded'})
     assert result.returncode == 0
@@ -101,6 +102,35 @@ def test_extensionless_explicit_batch_path_uses_its_launcher(tmp_path):
     batch = tmp_path / 'probe.cmd'
     batch.write_bytes(b'@echo off\r\nexit /b 0\r\n')
     assert run([str(tmp_path / 'probe')], tmp_path, capture=True).returncode == 0
+
+
+def test_installed_vitest_uses_its_node_entry_with_literal_argv(tmp_path):
+    from crapper.runners import typescript_command
+    from crapper.platform import run
+
+    (tmp_path / 'package.json').write_text('{"scripts":{"test":"vitest run"}}')
+    binary = tmp_path / 'node_modules' / '.bin'
+    binary.mkdir(parents=True)
+    (binary / 'vitest').write_text('#!/bin/sh\nexit 99\n')
+    (binary / 'vitest.cmd').write_bytes(b'@exit /b 99\r\n')
+    package = tmp_path / 'node_modules' / 'vitest'
+    package.mkdir()
+    (package / 'package.json').write_text('{"bin":{"vitest":"vitest.mjs"}}')
+    (package / 'vitest.mjs').write_text('console.log(JSON.stringify(process.argv.slice(2)))')
+    command = typescript_command(tmp_path, [], tmp_path / 'report %CD% & spaced')
+    result = run(command, tmp_path, capture=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == command[1:]
+
+
+def test_timeout_ends_captured_command_and_its_descendants(tmp_path):
+    from crapper.platform import run
+
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run(SPAWNER, tmp_path, capture=True, timeout=0.4)
+    assert time.monotonic() - started < 2
+    assert _ends_within(_pid(tmp_path / 'grandchild.pid'), 2)
 
 
 def test_captured_output_returns_at_leader_exit_with_inherited_pipes(tmp_path):
