@@ -4,13 +4,17 @@ import os
 import tempfile
 from pathlib import Path
 
+from crapper.platform import replace
+
 
 def write_bytes(path: Path, payload: bytes) -> None:
     """Stage `payload` beside `path`, then rename it into place.
 
+    Bytes are written as given (binary mode), so LF stays LF on every host.
     A failure at any step leaves the previous file untouched and removes the
     staged copy. The staged file is closed before the rename, which keeps the
-    swap atomic, and made world-readable, since mkstemp creates it 0600.
+    swap atomic and lets Windows replace it, and made world-readable, since
+    mkstemp creates it 0600.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -22,7 +26,7 @@ def write_bytes(path: Path, payload: bytes) -> None:
             staged = Path(stream.name)
             stream.write(payload)
         os.chmod(staged, 0o644)
-        os.replace(staged, path)
+        replace(staged, path)
     finally:
         if staged is not None:
             staged.unlink(missing_ok=True)
