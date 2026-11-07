@@ -21,6 +21,7 @@ from pathlib import Path
 
 from crapper.coverage import CoverageBundle, load_bundle, read_fresh_lcov
 from crapper.discover import is_test_file, language_of
+from crapper import platform
 from crapper.stamp import STAMP_NAME, fingerprint, record, stale_files  # noqa: F401  stale_files is public here
 
 _MAVEN = [
@@ -44,7 +45,7 @@ def run_shell(command: str | list[str], cwd: Path) -> int:
     display = command if isinstance(command, str) else shlex.join(command)
     _warn(f"+ ({cwd}) {display}")
     try:
-        completed = subprocess.run(command, cwd=cwd, shell=isinstance(command, str))
+        completed = platform.run(command, cwd)
     except OSError as exc:
         _warn(f"Coverage command failed to start: {exc}")
         return 127
@@ -285,11 +286,11 @@ def python_roots(root: Path, files: list[Path]) -> list[Path]:
 
 
 def _python_executable(package: Path) -> str:
-    for relative in (".venv/bin/python", "venv/bin/python"):
-        candidate = package / relative
+    for venv in (".venv", "venv"):
+        candidate = package / venv / platform.VENV_PYTHON
         if candidate.is_file():
             return str(candidate)
-    return "python3"
+    return platform.DEFAULT_PYTHON
 
 
 def uses_pytest(package: Path) -> bool:
@@ -532,9 +533,7 @@ def lua_modules(root: Path, files: list[Path]) -> dict[Path, list[Path]]:
 
 def _lua_version(binary: str) -> str:
     try:
-        completed = subprocess.run(
-            [binary, "-e", "io.write(_VERSION)"], capture_output=True, text=True
-        )
+        completed = platform.run([binary, "-e", "io.write(_VERSION)"], Path.cwd(), capture=True)
     except OSError:
         return ""
     return completed.stdout.strip()
@@ -591,10 +590,10 @@ def lua_cluacov_version(lua: str) -> str:
 
     loader = "pcall(require, 'luarocks.loader'); "
     try:
-        completed = subprocess.run(
+        completed = platform.run(
             [lua, "-e", loader + "local ok, v = pcall(require, 'cluacov.version'); "
              "if ok and type(v) == 'string' then io.write(v) end"],
-            capture_output=True, text=True,
+            Path.cwd(), capture=True,
         )
     except OSError:
         return ""
@@ -642,7 +641,7 @@ def absolute_lcov_sources(report: Path, module: Path) -> None:
         if line.startswith("SF:") and not Path(line[3:]).is_absolute():
             line = "SF:" + (module / line[3:]).as_posix()
         lines.append(line)
-    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 def _record_lua_lcov(module: Path, code: int, stats: Path, report: Path, lcov_cmd: str | list[str]) -> None:
@@ -677,7 +676,7 @@ _BUSTED_SPECS = (
 def run_captured(command: list[str], cwd: Path) -> subprocess.CompletedProcess:
     """Run argv with its output held, so concurrent runs do not interleave."""
     try:
-        return subprocess.run(command, cwd=cwd, capture_output=True, text=True, errors="replace")
+        return platform.run(command, cwd, capture=True)
     except OSError as exc:
         return subprocess.CompletedProcess(command, 127, "", f"Coverage command failed to start: {exc}\n")
 
@@ -737,7 +736,7 @@ def _shard_artifacts(directory: Path) -> list[Path]:
 
 def _write_lua_config(config: Path, stats: Path, report: Path, selected: list[Path], module: Path) -> None:
     try:
-        config.write_text(lua_coverage_config(stats, report, selected, module), encoding="utf-8")
+        config.write_text(lua_coverage_config(stats, report, selected, module), encoding="utf-8", newline="\n")
     except OSError as exc:
         raise CoverageError(f"Cannot prepare LuaCov config: {exc}") from exc
 

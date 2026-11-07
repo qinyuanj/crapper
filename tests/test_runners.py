@@ -94,10 +94,10 @@ def test_rust_module_is_the_nearest_cargo_package(tmp_path):
     assert rust_modules(tmp_path, [lib]) == [(tmp_path / "src-tauri").resolve()]
 
 
-def test_java_and_go_modules_keep_the_path_under_the_project_root(tmp_path):
+def test_java_and_go_modules_keep_the_path_under_the_project_root(tmp_path, symlink):
     _write(tmp_path, "real/pom.xml", "<project/>\n")
     source = _write(tmp_path, "real/src/A.java", "class A {}\n")
-    (tmp_path / "linked").symlink_to(tmp_path / "real")
+    symlink(tmp_path / "linked", tmp_path / "real")
     linked = tmp_path / "linked" / "src" / "A.java"
     assert _modules_with([linked, source], "java", "pom.xml", tmp_path) == [
         tmp_path / "linked",
@@ -176,10 +176,16 @@ def test_clean_clojure_keeps_other_language_reports(tmp_path):
 
 
 def test_python_executable_prefers_a_project_venv(tmp_path):
-    binary = tmp_path / ".venv" / "bin" / "python"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("", encoding="utf-8")
+    import venv
+
+    venv.EnvBuilder(with_pip=False).create(tmp_path / ".venv")
+    binary = tmp_path / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     assert _python_executable(tmp_path) == str(binary)
+
+
+def test_python_executable_without_a_venv_is_the_hosts_python(tmp_path):
+    # Windows has no python3.exe outside the Microsoft Store alias.
+    assert _python_executable(tmp_path) == ("python" if os.name == "nt" else "python3")
 
 
 def test_rust_kind_installs_llvm_cov_when_it_is_missing(monkeypatch):
@@ -281,12 +287,7 @@ def test_missing_build_files_skip_that_language(tmp_path, monkeypatch):
 
 def test_run_shell_returns_the_child_status_and_reports_a_failed_start(tmp_path, monkeypatch, capsys):
     assert run_shell("exit 3", tmp_path) == 3
-
-    def boom(*_args, **_kwargs):
-        raise OSError("nope")
-
-    monkeypatch.setattr("crapper.runners.subprocess.run", boom)
-    assert run_shell("exit 3", tmp_path) == 127
+    assert run_shell(["crapper-no-such-program-5"], tmp_path) == 127
     assert "failed to start" in capsys.readouterr().err
 
 
@@ -297,10 +298,27 @@ def test_argv_executes_interpreter_and_script_paths_with_spaces(tmp_path):
 
     environment = tmp_path / "python environment"
     venv.EnvBuilder(with_pip=False).create(environment)
-    executable = environment / "bin" / "python"
+    executable = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     script = _write(tmp_path, "script directory/check arguments.py",
-                    "import sys\nassert sys.argv[1:] == ['path with spaces', 'a&b', \"quote'word\"]\n")
-    assert run_shell([str(executable), str(script), "path with spaces", "a&b", "quote'word"], tmp_path) == 0
+                    "import sys\nassert sys.argv[1:] == ['path with spaces', 'a&b', \"quote'word\", 'ünï']\n")
+    assert run_shell([str(executable), str(script), "path with spaces", "a&b", "quote'word", "ünï"], tmp_path) == 0
+
+
+def _launcher(directory: Path, name: str, status: int) -> Path:
+    """An executable `name` on this host that exits `status`: a .cmd on Windows, as npm and npx are."""
+
+    if os.name == "nt":
+        return _write(directory, f"{name}.cmd", f"@exit /b {status}\r\n")
+    launcher = _write(directory, name, f"#!/bin/sh\nexit {status}\n")
+    launcher.chmod(0o755)
+    return launcher
+
+
+def test_argv_finds_a_launcher_on_path_by_its_bare_name(tmp_path, monkeypatch):
+    tools = tmp_path / "tool directory"
+    _launcher(tools, "argv-tool", 7)
+    monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
+    assert run_shell(["argv-tool", "path with spaces"], tmp_path) == 7
 
 
 def test_custom_shell_command_preserves_redirection(tmp_path):
@@ -480,7 +498,7 @@ def test_python_without_coverage_is_na_without_an_install(tmp_path, monkeypatch,
     monkeypatch.setattr("crapper.runners.run_shell", lambda command, cwd: ran.append(command) or 1)
     source = _write(tmp_path, "helper.py", "def run():\n    return 1\n")
     assert run_coverage(tmp_path, [source], None) is None
-    assert ran == [["python3", "-c", "import coverage"]]
+    assert ran == [["python" if os.name == "nt" else "python3", "-c", "import coverage"]]
     assert "coverage is missing" in capsys.readouterr().err
 
 
@@ -631,9 +649,11 @@ def test_prepare_report_creates_missing_parents(tmp_path):
 
 
 def test_lua_version_is_what_the_interpreter_writes(tmp_path):
-    binary = tmp_path / "lua"
-    binary.write_text("#!/bin/sh\nprintf 'Lua 5.4\\n'\n", encoding="utf-8")
-    binary.chmod(0o755)
+    if os.name == "nt":
+        binary = _write(tmp_path, "lua.cmd", "@echo Lua 5.4\r\n")
+    else:
+        binary = _write(tmp_path, "lua", "#!/bin/sh\nprintf 'Lua 5.4\\n'\n")
+        binary.chmod(0o755)
     assert _lua_version(str(binary)) == "Lua 5.4"
     assert _lua_version(str(tmp_path / "missing")) == ""
 
