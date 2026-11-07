@@ -25,5 +25,7 @@ _UNKNOWN = UnknownFactory()
 def functions_in_file(
     language: str, source: str, path: str, project_root: str
 ) -> list[Function]:
+    """Functions in one file. `path` is project-relative; either separator names the same module."""
+
     factory = _FACTORIES.get(language, _UNKNOWN)
-    return factory.create().functions(source, path, project_root)
+    return factory.create().functions(source, path.replace("\\", "/"), project_root)
