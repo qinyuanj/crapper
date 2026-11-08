@@ -18,7 +18,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 import threading
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from crapper.coverage import CoverageBundle, load_bundle, read_fresh_lcov
 from crapper.discover import is_test_file, language_of
@@ -79,6 +79,19 @@ def _wrote(report: Path | None, language: str) -> bool:
         return True
     _warn(f"{language} coverage wrote no {report}. {language} coverage will be N/A.")
     return False
+
+
+def _anchored(report: Path | None, module: Path, language: str) -> bool:
+    """Anchor a written report's sources to `module`. False only when the rewrite failed."""
+
+    if report is None or not report.is_file():
+        return True
+    try:
+        absolute_lcov_sources(report, module)
+    except (OSError, UnicodeError) as exc:
+        _warn(f"Cannot anchor {report} to {module}: {exc}. {language} coverage will be N/A.")
+        return False
+    return True
 
 
 def _run_reported(command: list[str], module: Path, language: str, report: Path | None = None) -> bool:
@@ -421,7 +434,9 @@ def _cover_typescript_package(root: Path, package: Path, files: list[Path]) -> b
         return False
     _prepare_report(report)
     expected = None if command == _NPM_COVERAGE else report
-    return _run_reported(command, package, "TypeScript", expected)
+    ran = _run_reported(command, package, "TypeScript", expected)
+    # Vitest reports on failure too, and load_bundle reads that report either way.
+    return _anchored(expected, package, "TypeScript") and ran
 
 
 def _cover_typescript(root: Path, files: list[Path]) -> bool:
@@ -477,7 +492,9 @@ def _cover_python_package(root: Path, package: Path, files: list[Path]) -> bool:
         py, _python_kind(py, package), data_file, report, python_sources(package, files)
     )
     recorded = _record_python_lcov(package, run_shell(run_cmd, package), data_file, lcov_cmd)
-    return recorded and _wrote(report, "Python")
+    # Failing tests still record a report, and load_bundle reads it either way.
+    anchored = _anchored(report, package, "Python")
+    return recorded and _wrote(report, "Python") and anchored
 
 
 def _cover_python(root: Path, files: list[Path]) -> bool:
@@ -640,12 +657,19 @@ def lua_coverage_commands(lua: str, config: Path) -> tuple[list[str], list[str]]
 
 
 def absolute_lcov_sources(report: Path, module: Path) -> None:
-    """luacov writes paths relative to where busted ran. Anchor them to that directory."""
+    """Anchor relative SF paths to `module`, the directory the coverage tool ran in.
+
+    LuaCov, c8, Vitest and coverage.py write sources relative to their cwd, which
+    is the package, not the project root. Absolute paths are kept, so a second
+    pass changes nothing. A drive-letter path counts as absolute on every
+    platform; relative backslash separators become `/`.
+    """
 
     lines = []
     for line in report.read_text(encoding="utf-8").splitlines():
-        if line.startswith("SF:") and not Path(line[3:]).is_absolute():
-            line = "SF:" + (module / line[3:]).as_posix()
+        source = line[3:]
+        if line.startswith("SF:") and not (Path(source).is_absolute() or PureWindowsPath(source).drive):
+            line = "SF:" + (module / source.replace("\\", "/")).as_posix()
         lines.append(line)
     report.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 

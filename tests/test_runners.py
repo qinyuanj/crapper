@@ -5,7 +5,9 @@ import sys
 import pytest
 from pathlib import Path
 
+from crapper.coverage import load_bundle
 from crapper.discover import is_test_file
+from crapper.model import Function
 from crapper.runners import (
     CoverageError,
     _clean_clojure,
@@ -25,6 +27,7 @@ from crapper.runners import (
     _restore_manifests,
     _rust_kind,
     _vitest_version,
+    absolute_lcov_sources,
     python_coverage_commands,
     python_roots,
     python_sources,
@@ -641,6 +644,91 @@ def test_python_tests_failing_with_exit_one_still_record_coverage(tmp_path, monk
     monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 0)
     _record_python_lcov(tmp_path, 1, data, ["lcov"])
     assert "Python tests exited 1" in capsys.readouterr().err
+
+
+def _package_relative_shell(monkeypatch, lcov: str):
+    """A test run that writes `lcov` wherever crapper asks for its report, the way c8 and coverage.py do."""
+
+    def shell(command, _cwd):
+        if "--reports-dir" in command:
+            _write(Path(command[command.index("--reports-dir") + 1]), "lcov.info", lcov)
+        for part in command:
+            if part.startswith("--data-file=") and "run" in command:
+                _write(Path(part.removeprefix("--data-file=")), "", "data")
+        if "lcov" in command and "-o" in command:
+            _write(Path(command[command.index("-o") + 1]), "", lcov)
+        return 0
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+
+
+def _percent(root: Path, path: str, language: str, start=1, end=3):
+    return load_bundle(root).percent_for(Function("f", "ns", 1, start, end, path, language))
+
+
+_TS_LCOV = "TN:\nSF:src\\core\\ids.ts\nDA:1,1\nDA:2,1\nDA:3,0\nLF:3\nLH:2\nend_of_record\n"
+
+
+def test_typescript_package_in_a_subdirectory_joins_its_coverage(tmp_path, monkeypatch):
+    _write(tmp_path, "client/package.json", json.dumps({"scripts": {"test": "node --test"}}))
+    source = _write(tmp_path, "client/src/core/ids.ts", "export const a = 1\nexport const b = 2\nexport const c = 3\n")
+    _package_relative_shell(monkeypatch, _TS_LCOV)
+    run_coverage(tmp_path, [source], None, strict=True)
+    assert _percent(tmp_path, "client/src/core/ids.ts", "typescript") == pytest.approx(200 / 3)
+
+
+def test_typescript_package_at_the_root_still_joins_its_coverage(tmp_path, monkeypatch):
+    _write(tmp_path, "package.json", json.dumps({"scripts": {"test": "node --test"}}))
+    source = _write(tmp_path, "src/core/ids.ts", "export const a = 1\nexport const b = 2\nexport const c = 3\n")
+    _package_relative_shell(monkeypatch, _TS_LCOV)
+    run_coverage(tmp_path, [source], None, strict=True)
+    assert _percent(tmp_path, "src/core/ids.ts", "typescript") == pytest.approx(200 / 3)
+
+
+def test_python_package_in_a_subdirectory_joins_its_coverage(tmp_path, monkeypatch):
+    _write(tmp_path, "service/pyproject.toml", "[project]\nname = 'svc'\n")
+    source = _write(tmp_path, "service/app/core.py", "def a():\n    return 1\n\n\ndef b():\n    return 2\n")
+    lcov = "SF:app/core.py\nDA:1,1\nDA:2,1\nDA:5,1\nDA:6,0\nLF:4\nLH:3\nend_of_record\n"
+    _package_relative_shell(monkeypatch, lcov)
+    run_coverage(tmp_path, [source], None, strict=True)
+    assert _percent(tmp_path, "service/app/core.py", "python", 5, 6) == 50.0
+
+
+def test_an_absolute_source_from_a_subdirectory_package_is_kept(tmp_path, monkeypatch):
+    _write(tmp_path, "client/package.json", json.dumps({"scripts": {"test": "node --test"}}))
+    source = _write(tmp_path, "client/src/core/ids.ts", "export const a = 1\nexport const b = 2\nexport const c = 3\n")
+    absolute = source.resolve().as_posix()
+    _package_relative_shell(monkeypatch, _TS_LCOV.replace("src\\core\\ids.ts", absolute))
+    run_coverage(tmp_path, [source], None, strict=True)
+    report = tmp_path / "target" / "coverage" / "typescript" / "client" / "lcov.info"
+    assert f"SF:{absolute}\n" in report.read_text(encoding="utf-8")
+    assert _percent(tmp_path, "client/src/core/ids.ts", "typescript") == pytest.approx(200 / 3)
+
+
+def _raise_undecodable(_report, _module):
+    raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+
+def test_a_report_that_cannot_be_anchored_fails_that_languages_coverage(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "client/package.json", json.dumps({"scripts": {"test": "node --test"}}))
+    source = _write(tmp_path, "client/src/app.ts", "export const n = 1\n")
+    _package_relative_shell(monkeypatch, "SF:src/app.ts\nDA:1,1\n")
+    monkeypatch.setattr("crapper.runners.absolute_lcov_sources", _raise_undecodable)
+    with pytest.raises(CoverageError, match="No usable coverage for typescript"):
+        run_coverage(tmp_path, [source], None, strict=True)
+    assert "TypeScript coverage will be N/A" in capsys.readouterr().err
+
+
+def test_anchoring_sources_twice_leaves_the_report_unchanged(tmp_path):
+    report = _write(tmp_path, "lcov.info", "SF:src\\core\\ids.ts\nDA:1,1\nSF:src/b.ts\nSF:C:\\abs\\c.ts\nend_of_record\n")
+    module = (tmp_path / "client").resolve()
+    absolute_lcov_sources(report, module)
+    once = report.read_bytes()
+    absolute_lcov_sources(report, module)
+    assert report.read_bytes() == once
+    assert f"SF:{module.as_posix()}/src/core/ids.ts\n".encode() in once
+    assert b"SF:C:\\abs\\c.ts\n" in once
+    assert b"\r" not in once
 
 
 def test_prepare_report_creates_missing_parents(tmp_path):
