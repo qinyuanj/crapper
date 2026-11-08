@@ -305,19 +305,24 @@ def platform_warning(platform: str, root: Path) -> str | None:
     return None
 
 
+def _count_unscored(entries) -> None:
+    """With coverage requested, name how many functions came out N/A."""
+
+    unscored = sum(1 for entry in entries if entry.crap is None)
+    if unscored:
+        print(f"{unscored} of {len(entries)} functions have no coverage", file=sys.stderr)
+
+
 def _threshold_status(entries, threshold: float | None, coverage_requested: bool) -> int:
     """Exit status after publication: 0 pass, 2 exceeded, 3 unmeasured.
 
-    With coverage requested, any N/A function is counted on stderr. A threshold
-    run in which no analyzed function was scored cannot pass: it is unmeasured.
+    A threshold run with coverage in which no analyzed function was scored
+    cannot pass: it is unmeasured.
     """
 
-    scored = [entry.crap for entry in entries if entry.crap is not None]
-    unmeasured = len(entries) - len(scored)
-    if coverage_requested and unmeasured:
-        print(f"{unmeasured} of {len(entries)} functions have no coverage", file=sys.stderr)
     if threshold is None:
         return 0
+    scored = [entry.crap for entry in entries if entry.crap is not None]
     if not scored:
         if coverage_requested and entries:
             print("No function's coverage was measured, so --threshold cannot pass.", file=sys.stderr)
@@ -387,6 +392,8 @@ def run(argv: list[str] | None = None) -> int:
         return 1
     print(report, end="", flush=True)
     print(f"Wrote {metrics}", file=sys.stderr)
+    if not options.no_coverage:
+        _count_unscored(entries)
     return _threshold_status(entries, options.threshold, not options.no_coverage)
 
 
