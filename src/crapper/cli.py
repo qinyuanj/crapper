@@ -58,7 +58,9 @@ Options:
   --use-existing-coverage       Read coverage already on disk. Do not rerun tests.
   --coverage-command <cmd>      Run this command instead of the per-language
                                 coverage tools, then read the reports it wrote.
-  --threshold <number>          Exit 2 when the worst CRAP score is above this.
+  --threshold <number>          Exit 2 when the worst CRAP score is above this,
+                                or 3 when coverage was requested but no
+                                function's coverage was measured.
   --lua-shards <n>              Split Lua spec files across n Busted coverage
                                 shards. Default: the CPU count. 1 keeps one
                                 process for specs that share state.
@@ -76,8 +78,11 @@ named test, tests, spec, specs, vendor, node_modules, and target are skipped,
 as are *_test.go, *.spec.ts, test_*.py, *_test.py, and *_spec.lua files.
 
 Exit status: 0 when the analysis completed, 2 when --threshold was exceeded
-after the snapshot was written, 1 for a usage error, failed Lua or custom
-coverage, failed --full-tree coverage, or a snapshot that could not be written.
+after the snapshot was written, 3 when --threshold was given with coverage but
+no analyzed function's coverage was measured, after the snapshot was written,
+1 for a usage error, failed Lua or custom coverage, failed --full-tree coverage,
+or a snapshot that could not be written. With coverage, functions whose
+coverage is N/A are counted on stderr.
 
 Coverage, when it is produced:
   Clojure      clj -M:cov --lcov, then Cloverage form counts or LCOV
@@ -300,12 +305,33 @@ def platform_warning(platform: str, root: Path) -> str | None:
     return None
 
 
-def _threshold_exceeded(entries, threshold: float | None) -> bool:
+def _count_unscored(entries) -> None:
+    """With coverage requested, name how many functions came out N/A."""
+
+    unscored = sum(1 for entry in entries if entry.crap is None)
+    if unscored:
+        print(f"{unscored} of {len(entries)} functions have no coverage", file=sys.stderr)
+
+
+def _threshold_status(entries, threshold: float | None, coverage_requested: bool) -> int:
+    """Exit status after publication: 0 pass, 2 exceeded, 3 unmeasured.
+
+    A threshold run with coverage in which no analyzed function was scored
+    cannot pass: it is unmeasured.
+    """
+
+    if threshold is None:
+        return 0
     scored = [entry.crap for entry in entries if entry.crap is not None]
-    if threshold is None or not scored or max(scored) <= threshold:
-        return False
+    if not scored:
+        if coverage_requested and entries:
+            print("No function's coverage was measured, so --threshold cannot pass.", file=sys.stderr)
+            return 3
+        return 0
+    if max(scored) <= threshold:
+        return 0
     print(f"CRAP threshold exceeded: {max(scored):.1f} > {threshold:.1f}", file=sys.stderr)
-    return True
+    return 2
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -366,7 +392,9 @@ def run(argv: list[str] | None = None) -> int:
         return 1
     print(report, end="", flush=True)
     print(f"Wrote {metrics}", file=sys.stderr)
-    return 2 if _threshold_exceeded(entries, options.threshold) else 0
+    if not options.no_coverage:
+        _count_unscored(entries)
+    return _threshold_status(entries, options.threshold, not options.no_coverage)
 
 
 def main(argv: list[str] | None = None) -> None:

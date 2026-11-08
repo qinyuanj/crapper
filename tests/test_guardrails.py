@@ -4,6 +4,7 @@ Fast and tool-free, so the pre-commit hook runs them on every commit.
 """
 
 import ast
+import re
 import subprocess
 from pathlib import Path
 
@@ -97,6 +98,19 @@ def test_launches_are_found_through_any_import_spelling(tmp_path, source, expect
     path = tmp_path / "module.py"
     path.write_text(source, encoding="utf-8")
     assert sorted(_launches(path)) == expected
+
+
+def test_readme_and_help_document_the_same_exit_codes():
+    from crapper.cli import HELP
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    table = set(re.findall(r"^\| (\d+) \|", readme, flags=re.MULTILINE))
+    paragraph = HELP.split("Exit status:", 1)[1].split("\n\n", 1)[0]
+    help_codes = set(re.findall(r"\b(\d+) (?:when|for)\b", paragraph))
+    assert table and table == help_codes, (
+        f"README exit table lists {sorted(table)}, the help's Exit status paragraph lists "
+        f"{sorted(help_codes)}. Document every exit code in both."
+    )
 
 
 def _tracked(*pathspecs: str) -> list[str]:

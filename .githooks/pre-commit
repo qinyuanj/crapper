@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fast checks before every commit: processes start only inside the platform
-# boundary, and golden fixtures and EDN files carry no CR.
+# boundary, golden fixtures and EDN files carry no CR, and README and help
+# document the same exit codes.
 # Enable once per clone: git config core.hooksPath .githooks
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
