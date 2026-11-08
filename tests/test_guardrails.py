@@ -4,6 +4,7 @@ Fast and tool-free, so the pre-commit hook runs them on every commit.
 """
 
 import ast
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -97,3 +98,19 @@ def test_launches_are_found_through_any_import_spelling(tmp_path, source, expect
     path.write_text(source, encoding="utf-8")
     assert sorted(_launches(path)) == expected
 
+
+def _tracked(*pathspecs: str) -> list[str]:
+    listed = subprocess.run(["git", "ls-files", "-z", "--", *pathspecs], cwd=ROOT, capture_output=True)
+    if listed.returncode != 0:
+        pytest.skip("not a git checkout")
+    return [name for name in listed.stdout.decode("utf-8").split("\0") if name]
+
+
+def test_golden_files_are_checked_out_with_lf():
+    crlf = [name for name in _tracked("tests/fixtures", "*.edn") if b"\r" in (ROOT / name).read_bytes()]
+    assert not crlf, (
+        "These tracked golden files contain CR bytes, so byte-for-byte comparisons will fail:\n  "
+        + "\n  ".join(crlf)
+        + "\nFix: keep `*.edn` and `tests/fixtures/**` as `text eol=lf` in .gitattributes, then delete "
+        "those working copies and re-checkout them: git checkout -- <files>"
+    )
