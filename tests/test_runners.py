@@ -88,6 +88,28 @@ def test_typescript_package_is_found_from_a_source_file(tmp_path):
     assert typescript_packages(tmp_path, [source]) == [(tmp_path / "web").resolve()]
 
 
+def test_subpackage_typescript_coverage_joins_its_sources(tmp_path, monkeypatch):
+    # Vitest writes SF relative to the package (`src\app.ts` on Windows);
+    # the function path is relative to the project root (`web/src/app.ts`).
+    from crapper import runners
+    from crapper.coverage import load_bundle
+
+    _write(tmp_path, "web/package.json", json.dumps({"scripts": {"test": "vitest run"}}))
+    source = _write(tmp_path, "web/src/app.ts", "export const n = 1\n")
+    package = (tmp_path / "web").resolve()
+    report = _coverage_report(tmp_path, package, "typescript")
+
+    def fake_vitest(command, cwd):
+        _write(report.parent, report.name, "SF:src\\app.ts\nDA:1,1\nLF:1\nLH:1\nend_of_record\n")
+        return 0
+
+    monkeypatch.setattr(runners, "_ensure_vitest_coverage", lambda package: True)
+    monkeypatch.setattr(runners, "run_shell", fake_vitest)
+    assert runners._cover_typescript_package(tmp_path, package, [source])
+    lines = load_bundle(tmp_path)._lcov_lines("web/src/app.ts")
+    assert lines == {1: (1, 1)}
+
+
 def test_rust_module_is_the_nearest_cargo_package(tmp_path):
     _write(tmp_path, "src-tauri/Cargo.toml", '[package]\nname = "bookwriter"\nversion = "0.1.0"\n')
     lib = _write(tmp_path, "src-tauri/src/lib.rs", "pub fn read_text() {}\n")

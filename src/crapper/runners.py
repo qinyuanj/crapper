@@ -421,7 +421,11 @@ def _cover_typescript_package(root: Path, package: Path, files: list[Path]) -> b
         return False
     _prepare_report(report)
     expected = None if command == _NPM_COVERAGE else report
-    return _run_reported(command, package, "TypeScript", expected)
+    ok = _run_reported(command, package, "TypeScript", expected)
+    if ok and expected is not None:
+        # Vitest/c8 write SF relative to the package; anchor them like Lua.
+        absolute_lcov_sources(expected, package)
+    return ok
 
 
 def _cover_typescript(root: Path, files: list[Path]) -> bool:
