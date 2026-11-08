@@ -155,18 +155,22 @@ def command_line(argv: list[str], environment: dict[str, str]) -> str | list[str
 
 
 def run(command: str | list[str], cwd: Path, capture: bool = False,
-        env: dict[str, str] | None = None, timeout: float | None = None) -> subprocess.CompletedProcess:
+        env: dict[str, str] | None = None, timeout: float | None = None,
+        text: bool = True) -> subprocess.CompletedProcess:
     """Run argv without a shell, or a command string in the host shell (sh, cmd.exe).
 
-    `capture` holds text output. On Windows the process tree runs in a Job
-    Object, so an interrupt, an exception, or crapper's own death ends every
-    process the command started. OSError means the program did not start.
+    `capture` holds the output: text, or bytes when `text` is False. On Windows
+    the process tree runs in a Job Object, so an interrupt, an exception, or
+    crapper's own death ends every process the command started. OSError means
+    the program did not start.
     """
 
     shell = isinstance(command, str)
     options: dict = {"cwd": cwd, "shell": shell, "env": env}
     if capture:
-        options.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+        options.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if text:
+            options.update(text=True, errors="replace")
     argv = command if shell else resolve(command, cwd, env)
     if not WINDOWS:
         return subprocess.run(argv, timeout=timeout, **options)

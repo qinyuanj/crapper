@@ -1,11 +1,12 @@
 """Find source files and decide which language each one is written in."""
 
 import os
-import subprocess
 import sys
 from fnmatch import fnmatchcase
 from functools import cache
 from pathlib import Path
+
+from crapper import platform
 
 EXTENSIONS = {
     ".clj": "clojure",
@@ -157,7 +158,7 @@ def iter_source_files(roots: list[Path]) -> list[Path]:
 
 
 def _git(root: Path, *args: str) -> bytes | None:
-    result = subprocess.run(["git", *args], cwd=root, check=False, capture_output=True)
+    result = platform.run(["git", *args], root, capture=True, text=False)
     if result.returncode != 0:
         print(os.fsdecode(result.stderr).strip() or "git status failed", file=sys.stderr)
         return None

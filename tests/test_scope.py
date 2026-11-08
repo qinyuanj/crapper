@@ -76,7 +76,7 @@ def test_git_failure_is_reported_and_selects_nothing(tmp_path, monkeypatch, caps
         stdout = b""
         stderr = b"fatal: not a git repository\n"
 
-    monkeypatch.setattr("crapper.discover.subprocess.run", lambda *_a, **_k: Failed())
+    monkeypatch.setattr("crapper.discover.platform.run", lambda *_a, **_k: Failed())
     assert changed_files(tmp_path) == []
     assert capsys.readouterr().err == "fatal: not a git repository\n"
     Failed.stderr = b""
@@ -91,16 +91,16 @@ def test_status_failure_after_the_toplevel_lookup_selects_nothing(tmp_path, monk
         def __init__(self, returncode, stdout):
             self.returncode, self.stdout, self.stderr = returncode, stdout, b"status broke"
 
-    def fake(command, **kwargs):
-        calls.append((command, kwargs))
+    def fake(command, cwd, **kwargs):
+        calls.append((command, cwd, kwargs))
         return Result(0, f"{tmp_path}\n".encode()) if len(calls) == 1 else Result(1, b"?? a.py\0")
 
-    monkeypatch.setattr("crapper.discover.subprocess.run", fake)
+    monkeypatch.setattr("crapper.discover.platform.run", fake)
     _write(tmp_path, "a.py")
     assert changed_files(tmp_path) == []
     assert capsys.readouterr().err == "status broke\n"
-    assert all(kwargs["cwd"] == tmp_path.resolve() for _command, kwargs in calls)
-    assert all(kwargs["check"] is False and kwargs["capture_output"] is True for _c, kwargs in calls)
+    assert all(cwd == tmp_path.resolve() for _command, cwd, _kwargs in calls)
+    assert all(kwargs == {"capture": True, "text": False} for _c, _cwd, kwargs in calls)
 
 
 @pytest.mark.parametrize(
