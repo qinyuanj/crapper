@@ -1,7 +1,8 @@
+import sys
 from pathlib import Path
 
 from crapper.cli import platform_warning
-from crapper.platform import MINIMUM_WINDOWS_BUILD, refusal
+from crapper.platform import MINIMUM_WINDOWS_BUILD, refusal, run
 
 
 def test_windows_11_runs_natively():
@@ -35,3 +36,11 @@ def test_windows_drive_under_wsl_suggests_the_linux_filesystem():
 
 def test_linux_filesystem_paths_are_quiet():
     assert platform_warning("linux", Path("/home/me/proj")) is None
+
+def test_captured_output_is_text_unless_bytes_are_asked_for(tmp_path):
+    # git paths are UTF-8 whatever the locale, so discover asks for bytes.
+    script = "import sys; sys.stdout.buffer.write(b'ok\\n'); sys.stderr.buffer.write(b'warn\\n')"
+    text = run([sys.executable, "-c", script], tmp_path, capture=True)
+    raw = run([sys.executable, "-c", script], tmp_path, capture=True, text=False)
+    assert (text.stdout, text.stderr) == ("ok\n", "warn\n")
+    assert (raw.stdout, raw.stderr) == (b"ok\n", b"warn\n")
