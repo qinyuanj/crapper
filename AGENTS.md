@@ -18,4 +18,4 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 
 `luacov-reporter-lcov` is installed into `~/.luarocks`, not `/usr/local`. Lua searches `/usr/local` before `./?.lua` and the user tree after it. Coverage-gate tests stub `./luacov/reporter/lcov.lua` and require that stub to load. Ubuntu's `lua` alternative may be Lua 5.1; the tool and the tests use `lua5.4`.
 
-Verify with `.venv/bin/python -m pytest` and `./crapper`.
+Verify with `.venv/bin/python -m pytest` and `./crapper`. On native Windows the setup is README §Native Windows, and the same checks are `.venv\Scripts\python -m pytest` and `crapper.cmd`.
