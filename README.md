@@ -232,7 +232,7 @@ Custom command strings retain shell syntax and run from `--root` through the hos
 
 A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their warning-and-N/A behavior, except under `--full-tree`.
 
-When coverage was requested and some functions have N/A coverage, stderr counts them, for example `3 of 12 functions have no coverage`, and the exit status is unchanged. If `--threshold` is set and no analyzed function was scored (the tool was missing, the report joined nothing, or the report was empty), the run is unmeasured: crapper says so on stderr and exits **3** after publishing the snapshot. `--no-coverage` never counts N/A functions and never exits 3.
+When coverage was requested and some functions have N/A coverage, stderr counts them, for example `3 of 12 functions have no coverage`, and the exit status is unchanged. If `--threshold` is set and no analyzed function was scored (the tool was missing, the coverage report joined nothing, or it was empty), the run is unmeasured: crapper says so on stderr and exits **3** after publishing the snapshot. `--no-coverage` never counts N/A functions and never exits 3.
 
 ## Native Windows
 
@@ -304,7 +304,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-On native Windows use `python -m venv .venv` and `.venv\Scripts\python`. Tests
+On native Windows use `python -m venv .venv` and `.\.venv\Scripts\python`. Tests
 that need to create symlinks skip unless Developer Mode is on.
 
 `scripts/bench.py` times the three refresh modes on a copy of a project and compares each snapshot byte for byte with recorded references:
