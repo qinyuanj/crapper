@@ -256,6 +256,72 @@ def test_threshold_with_no_scores_does_not_call_max_on_an_empty_list(tmp_path):
     assert run(["--root", str(tmp_path), "--no-coverage", "--threshold", "1"]) == 0
 
 
+def test_threshold_exits_3_when_existing_coverage_joins_no_function(tmp_path, capsys):
+    _write(tmp_path, "src/demo/core.clj", "(ns demo.core)\n\n(defn choose [x]\n  (if x 1 0))\n")
+    lcov = tmp_path / "target" / "coverage" / "lcov.info"
+    lcov.parent.mkdir(parents=True)
+    lcov.write_text("SF:src/elsewhere/other.clj\nDA:3,1\nend_of_record\n", encoding="utf-8")
+    assert run(["--root", str(tmp_path), "--use-existing-coverage", "--threshold", "0"]) == 3
+    err = capsys.readouterr().err
+    assert "1 of 1 functions have no coverage\n" in err
+    assert "No function's coverage was measured" in err
+    text = (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
+    assert ":coverage nil" in text and ":crap nil" in text
+
+
+def test_threshold_exits_3_when_built_in_coverage_yields_no_data(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "src/demo/core.clj", "(ns demo.core)\n\n(defn choose [x]\n  (if x 1 0))\n")
+    monkeypatch.setattr("crapper.cli.run_coverage", lambda *_args: None)
+    assert run(["--root", str(tmp_path), "--threshold", "100"]) == 3
+    err = capsys.readouterr().err
+    assert "1 of 1 functions have no coverage\n" in err
+    assert "No function's coverage was measured" in err
+    assert ":crap nil" in (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
+
+
+def _half_covered(root: Path) -> None:
+    _write(root, "src/demo/core.clj", "(ns demo.core)\n\n(defn choose [x]\n  (if x 1 0))\n")
+    _write(root, "src/demo/util.clj", "(ns demo.util)\n\n(defn one [] 1)\n\n(defn two [] 2)\n")
+    lcov = root / "target" / "coverage" / "lcov.info"
+    lcov.parent.mkdir(parents=True)
+    lcov.write_text("SF:src/demo/core.clj\nDA:3,0\nDA:4,0\nend_of_record\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(("threshold", "status"), [("6", 0), ("5", 2)])
+def test_partial_coverage_keeps_its_status_and_counts_the_unscored(tmp_path, capsys, threshold, status):
+    _half_covered(tmp_path)
+    assert run(["--root", str(tmp_path), "--use-existing-coverage", "--threshold", threshold]) == status
+    err = capsys.readouterr().err
+    assert "2 of 3 functions have no coverage\n" in err
+    assert "No function's coverage was measured" not in err
+    assert ("CRAP threshold exceeded: 6.0 > 5.0" in err) == (status == 2)
+
+
+def test_all_unscored_without_threshold_exits_0_and_counts(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "src/demo/core.clj", "(ns demo.core)\n\n(defn choose [x]\n  (if x 1 0))\n")
+    monkeypatch.setattr("crapper.cli.run_coverage", lambda *_args: None)
+    assert run(["--root", str(tmp_path)]) == 0
+    assert capsys.readouterr().err.endswith("1 of 1 functions have no coverage\n")
+
+
+def test_no_coverage_threshold_prints_no_count(tmp_path, capsys):
+    _write(tmp_path, "src/demo/core.clj", "(ns demo.core)\n\n(defn choose [] 1)\n")
+    assert run(["--root", str(tmp_path), "--no-coverage", "--threshold", "1"]) == 0
+    assert "no coverage" not in capsys.readouterr().err
+
+
+def test_unmeasured_threshold_run_that_cannot_publish_exits_1(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "src/demo/core.clj", "(ns demo.core)\n\n(defn choose [] 1)\n")
+    monkeypatch.setattr("crapper.cli.run_coverage", lambda *_args: None)
+
+    def broken(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("crapper.atomic.os.replace", broken)
+    assert run(["--root", str(tmp_path), "--threshold", "1"]) == 1
+    assert capsys.readouterr().err == "Snapshot publication failed: disk full\n"
+
+
 def test_business_roots_exclude_exact_directories_without_duplicate_metrics(tmp_path):
     sources = {
         "client/main.lua": "client_main",
@@ -663,6 +729,11 @@ def test_source_roots_alone_still_walk_the_roots_then_filter_and_exclude(tmp_pat
     assert _chosen(tmp_path, "-s", "src", "c.py") == ["src/x/c.py"]
     assert _chosen(tmp_path, "-s", "src", "--exclude", "src/x") == ["src/a.py"]
     assert _chosen(tmp_path, "-s", "src", "src", "--exclude", "src/x") == ["src/a.py"]
+
+
+def test_help_documents_the_unmeasured_exit():
+    assert "or 3 when coverage was requested" in HELP
+    assert "3 when --threshold was given with coverage" in HELP
 
 
 def test_help_says_source_roots_narrow_paths_and_changed():

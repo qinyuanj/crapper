@@ -113,6 +113,7 @@ writes no report, crapper names the languages, leaves the previous
 | --- | --- |
 | 0 | analysis completed and the snapshot was written |
 | 2 | `--threshold` was exceeded, after the snapshot was written |
+| 3 | `--threshold` with coverage, but no analyzed function's coverage was measured, after the snapshot was written |
 | 1 | usage error, failed Lua or custom coverage, failed `--full-tree` coverage, or the snapshot could not be written |
 
 Deleting sources removes their entries on the next complete refresh. Deleting
@@ -230,6 +231,8 @@ Fresh custom and Lua LCOV must contain at least one completed `SF` record, posit
 Custom command strings retain shell syntax and run from `--root` through the host shell: `/bin/sh` on Linux, `cmd.exe` on native Windows. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
 
 A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their warning-and-N/A behavior, except under `--full-tree`.
+
+When coverage was requested and some functions have N/A coverage, stderr counts them, for example `3 of 12 functions have no coverage`, and the exit status is unchanged. If `--threshold` is set and no analyzed function was scored (the tool was missing, the report joined nothing, or the report was empty), the run is unmeasured: crapper says so on stderr and exits **3** after publishing the snapshot. `--no-coverage` never counts N/A functions and never exits 3.
 
 ## Native Windows
 
