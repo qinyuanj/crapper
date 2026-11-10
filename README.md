@@ -2,6 +2,8 @@
 
 CRAP scores for Clojure, Java, Go, TypeScript, Rust, Python, and Lua. One run detects the language of each source file, applies that language's complexity and coverage rules, and writes the snapshot [uml-viewer](https://github.com/unclebob/uml-viewer) already reads.
 
+> **DeepSeek Harness users:** the [dsh-uml-viewer](https://github.com/qinyuanj/dsh-uml-viewer) plugin carries a Rust port of crapper as its `uml-viewer crap` subcommand, so inside DSH you need nothing from this repository. Outside DSH, crapper still works on its own and the frozen [uml-viewer](https://github.com/qinyuanj/uml-viewer) `get-uml-viewer` flow still uses it. New features go to dsh-uml-viewer; this repository takes bug fixes only.
+
 The formula is the one from [crap4clj](https://github.com/unclebob/crap4clj), [crap4java](https://github.com/unclebob/crap4java), and [crap4go](https://github.com/unclebob/crap4go):
 
 ```text
