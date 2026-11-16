@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 
 import pytest
 from pathlib import Path
@@ -22,7 +21,6 @@ from crapper.runners import (
     _prepare_report,
     _python_executable,
     _python_kind,
-    _record_lua_lcov,
     _record_python_lcov,
     _restore_manifests,
     _rust_kind,

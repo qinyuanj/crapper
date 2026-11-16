@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast checks before every commit: processes start only inside the platform
+# Fast checks before every commit: Ruff lint, processes start only inside the platform
 # boundary, golden fixtures and EDN files carry no CR, and README and help
 # document the same exit codes.
 # Enable once per clone: git config core.hooksPath .githooks
@@ -18,4 +18,10 @@ if [ -z "$python" ]; then
   exit 1
 fi
 
+if ! "$python" -c 'import ruff' >/dev/null 2>&1; then
+  echo "pre-commit: ruff is missing from $python; install dev tools with: $python -m pip install -e '.[dev]'" >&2
+  exit 1
+fi
+
+"$python" -m ruff check
 PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" "$python" -m pytest -q -p no:cacheprovider tests/test_guardrails.py

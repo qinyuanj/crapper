@@ -31,4 +31,4 @@ if ! command -v bb >/dev/null 2>&1; then
   rm -rf "$tmp"
 fi
 
-echo "Done. Run: .venv/bin/pytest"
+echo "Done. Run: .venv/bin/python -m ruff check && .venv/bin/python -m pytest"

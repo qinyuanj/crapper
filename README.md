@@ -301,11 +301,20 @@ Prepare and verify an environment for the current checkout:
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m ruff check
 .venv/bin/python -m pytest
 ```
 
-On native Windows use `python -m venv .venv` and `.\.venv\Scripts\python`. Tests
-that need to create symlinks skip unless Developer Mode is on.
+On native Windows, use PowerShell:
+
+```powershell
+python -m venv .venv
+& .venv\Scripts\python.exe -m pip install -e ".[dev]"
+& .venv\Scripts\python.exe -m ruff check
+& .venv\Scripts\python.exe -m pytest
+```
+
+Tests that need to create symlinks skip unless Developer Mode is on.
 
 `scripts/bench.py` times the three refresh modes on a copy of a project and compares each snapshot byte for byte with recorded references:
 

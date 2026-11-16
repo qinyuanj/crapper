@@ -16,4 +16,5 @@ jobs:
           python-version: "3.12"
       # Lua 5.4, Busted, LuaCov, cluacov and bb, so the Lua tests run instead of skipping.
       - run: bash scripts/setup-ubuntu.sh
+      - run: .venv/bin/python -m ruff check
       - run: .venv/bin/python -m pytest -q -rs

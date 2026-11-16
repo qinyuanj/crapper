@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from crapper.analyze import analyze_files
-from crapper.coverage import load_bundle
 from crapper.discover import iter_source_files
 from crapper.runners import (
     CoverageError,

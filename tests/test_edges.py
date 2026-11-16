@@ -1,7 +1,6 @@
 """Branches the first mutation run left unexecuted."""
 
 import runpy
-from pathlib import Path
 
 import pytest
 
