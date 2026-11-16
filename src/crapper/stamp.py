@@ -2,7 +2,7 @@
 
 `target/coverage/crapper-stamp.json` holds one tree fingerprint per language
 whose coverage succeeded, and the source files that run covered. Any edit,
-addition, or removal outside the skipped directories and tool caches changes
+addition, or removal outside the skipped directories, nested checkouts, and tool caches changes
 the fingerprint. A run during which the tree changed stamps nothing, because
 its reports may describe the old files.
 """
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from crapper.atomic import write_text
-from crapper.discover import SKIP_DIRS, language_of
+from crapper.discover import SKIP_DIRS, language_of, nested_checkout
 
 VERSION = 1
 STAMP_NAME = "crapper-stamp.json"
@@ -44,7 +44,7 @@ def _cache_file(name: str) -> bool:
 def _tree(root: Path):
     pruned = SKIP_DIRS | CACHE_DIRS
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in pruned]
+        dirnames[:] = [name for name in dirnames if name not in pruned and not nested_checkout(Path(dirpath) / name)]
         yield from (Path(dirpath) / name for name in filenames if not _cache_file(name))
 
 

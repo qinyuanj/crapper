@@ -431,3 +431,32 @@ def test_a_coverage_script_is_trusted_by_its_exit_status(tmp_path, monkeypatch):
     files = _typescript(tmp_path, {"coverage": "anything"})
     monkeypatch.setattr("crapper.runners.run_shell", lambda command, cwd: 0)
     assert _failed(tmp_path, files) == []
+
+
+def test_a_nested_checkout_gets_no_coverage_run(project, monkeypatch):
+    from crapper.discover import iter_source_files
+
+    cwds = []
+
+    def record(command, cwd):
+        cwds.append(Path(cwd).resolve())
+        return _succeed(command, cwd)
+
+    monkeypatch.setattr("crapper.runners.run_shell", record)
+    _write(project, "src/app.py")
+    _write(project, ".agents/worktrees/stray/.git", "gitdir: elsewhere\n")
+    _write(project, ".agents/worktrees/stray/pyproject.toml", "[tool.pytest.ini_options]\n")
+    _write(project, ".agents/worktrees/stray/src/other.py")
+    files = iter_source_files([project])
+    assert files == [(project / "src/app.py").resolve()]
+    run_coverage(project, files, None)
+    assert cwds and all(not cwd.is_relative_to(project / ".agents") for cwd in cwds)
+
+
+def test_a_nested_checkout_does_not_change_the_fingerprint(tmp_path):
+    source = _write(tmp_path, "a.py")
+    run_coverage(tmp_path, [source], OK)
+    _write(tmp_path, "nested/.git", "gitdir: elsewhere\n")
+    _write(tmp_path, "nested/src/b.py")
+    _write(tmp_path, "clone/.git/HEAD", "ref: refs/heads/main\n")
+    assert stale_files(tmp_path, [source], OK) == []

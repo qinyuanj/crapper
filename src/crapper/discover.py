@@ -88,12 +88,26 @@ def is_source_file(path: Path) -> bool:
     return language_of(path) is not None and not is_test_file(path)
 
 
+def nested_checkout(directory: Path) -> bool:
+    """A directory with its own `.git`: a file for a worktree, a directory for a clone.
+
+    Below the project root such a directory is another project, so the walk, the
+    changed-file filter, and the coverage fingerprint all leave it out.
+    """
+
+    return os.path.lexists(directory / ".git")
+
+
 def _walk(root: Path) -> list[Path]:
     if root.is_file():
         return [root]
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS and name not in TEST_DIRS]
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if name not in SKIP_DIRS and name not in TEST_DIRS and not nested_checkout(Path(dirpath) / name)
+        ]
         paths = (Path(dirpath) / name for name in filenames)
         found.extend(path for path in paths if is_source_file(path))
     return found
@@ -183,13 +197,17 @@ def _walked(path: Path, root: Path) -> bool:
 
     if not path.is_file() or not path.is_relative_to(root):
         return False
-    return SKIP_DIRS.isdisjoint(path.relative_to(root).parts[:-1])
+    directories = path.relative_to(root).parts[:-1]
+    if not SKIP_DIRS.isdisjoint(directories):
+        return False
+    return not any(nested_checkout(root.joinpath(*directories[:depth])) for depth in range(1, len(directories) + 1))
 
 
 def changed_files(root: Path) -> list[Path]:
     """Existing files under `root` that git reports as added, edited, or untracked.
 
-    Files in the directories the walk skips (`vendor`, `node_modules`, ...) are left out.
+    Files in the directories the walk skips (`vendor`, `node_modules`, nested
+    checkouts, ...) are left out.
     """
 
     root = root.resolve()

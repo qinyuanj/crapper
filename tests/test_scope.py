@@ -8,6 +8,7 @@ from crapper.discover import (
     exclude_files,
     excluded,
     exclusion_error,
+    iter_source_files,
     under_roots,
     without_excluded,
 )
@@ -202,3 +203,20 @@ def test_under_roots_compares_after_resolving_both_sides(tmp_path, symlink):
 def test_without_excluded_is_exclude_files(tmp_path):
     files = [tmp_path / "gen/a.py", tmp_path / "b.py"]
     assert without_excluded(files, tmp_path, ["gen"]) == exclude_files(files, tmp_path, ["gen"]) == [files[1]]
+
+
+def _nested_checkouts(root: Path) -> None:
+    """A worktree (`.git` file) and a clone (`.git` directory) below `root`."""
+
+    _write(root, "worktree/.git", "gitdir: ../.git/worktrees/worktree\n")
+    _write(root, "worktree/src/stray.py")
+    _write(root, "clone/.git/HEAD", "ref: refs/heads/main\n")
+    _write(root, "clone/lib/copy.go")
+
+
+def test_nested_checkouts_are_not_part_of_the_project(tmp_path, git):
+    git(tmp_path, "init", "-q")
+    kept = _write(tmp_path, "src/main.py")
+    _nested_checkouts(tmp_path)
+    assert iter_source_files([tmp_path]) == [kept]
+    assert changed_files(tmp_path) == [kept]
