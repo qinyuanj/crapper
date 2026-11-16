@@ -1,6 +1,6 @@
 # Coding standards
 
-Judgement calls for review. Mechanical rules live in `tests/test_guardrails.py` and the pre-commit hook, not here.
+Judgement calls for review. CI enforces mechanical rules with Ruff and `tests/test_guardrails.py`.
 
 ## Cross-platform paths
 
