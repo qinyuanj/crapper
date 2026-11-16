@@ -23,3 +23,7 @@ _Avoid_: uncovered run, empty run
 **Coverage shard**:
 One Busted process running a subset of the selected spec files under LuaCov; shard stats are summed into one coverage result.
 _Avoid_: worker, partition
+
+**Nested checkout**:
+A directory below the project root with its own `.git` entry: a file for a git worktree, a directory for a clone. It is another project, so discovery, `--changed`, and the coverage fingerprint leave it out.
+_Avoid_: stray worktree, sub-repo

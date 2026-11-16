@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from host_shell import chain, python
 
+from crapper.discover import iter_source_files
 from crapper.runners import CoverageError, _clean_clojure, run_coverage, stale_files
 
 STAMP = Path("target/coverage/crapper-stamp.json")
@@ -434,8 +435,6 @@ def test_a_coverage_script_is_trusted_by_its_exit_status(tmp_path, monkeypatch):
 
 
 def test_a_nested_checkout_gets_no_coverage_run(project, monkeypatch):
-    from crapper.discover import iter_source_files
-
     cwds = []
 
     def record(command, cwd):

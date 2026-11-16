@@ -17,7 +17,7 @@ CRAP = CC² × (1 − coverage)³ + CC
 crapper.cmd        # native Windows, from cmd or PowerShell
 ```
 
-The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
+The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, `target`, and nested checkouts (a directory below the root with its own `.git`, such as a worktree under `.agents/worktrees/`), and writes two results:
 
 - a table on stdout, worst score first
 - `.metrics/crap.edn`, atomically replaced after successful analysis; legacy selections with no sources leave it unchanged
@@ -33,7 +33,7 @@ The first run creates `.venv` and installs the tool. From a project root it walk
 ./crapper --threshold 30                 # exit 2 when the worst score is higher
 ```
 
-`--changed` asks git for added, modified, renamed, and untracked files (files inside a new directory included) under the project root, which may be a subdirectory of the repository. Deleted files are left out, and so are files in the directories the walk skips (`vendor`, `node_modules`, `.uml-viewer`, ...), judged below the project root. It works in a repository with no commits yet.
+`--changed` asks git for added, modified, renamed, and untracked files (files inside a new directory included) under the project root, which may be a subdirectory of the repository. Deleted files are left out, and so are files in the directories the walk skips (`vendor`, `node_modules`, `.uml-viewer`, nested checkouts, ...), judged below the project root. It works in a repository with no commits yet.
 
 ## Source roots and exclusions
 
@@ -214,7 +214,7 @@ After generating coverage, crapper records `target/coverage/crapper-stamp.json`:
  "files": {"python": ["src/app.py"]}}
 ```
 
-A language is listed only when its coverage succeeded in that run; a custom `--coverage-command` stands or falls for every language it was given. The fingerprint is a sha256 over the relative path, size, and modification time of every file in the project, skipping the same directories as the walk (`target`, `.venv`, `node_modules`, ...) but not the test directories, since tests change coverage. Caches the tools write as they run are skipped too: `.pytest_cache`, `.hypothesis`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.nox`, `.cpcache`, `.nyc_output`, `htmlcov`, and `.coverage` / `.coverage.*` files. The fingerprint is taken before and after the coverage commands; when a file changed while they ran, nothing from that run is stamped, because the reports may describe the old content. `files` lists the source files that run covered. `crapper.runners.stale_files(root, files, coverage_command)` returns the files whose reports cannot be trusted: no stamp, a different `--coverage-command`, a changed tree, or a file outside the covered set. mutator can use it to skip regenerating coverage crapper has just produced.
+A language is listed only when its coverage succeeded in that run; a custom `--coverage-command` stands or falls for every language it was given. The fingerprint is a sha256 over the relative path, size, and modification time of every file in the project, skipping the same directories as the walk (`target`, `.venv`, `node_modules`, nested checkouts, ...) but not the test directories, since tests change coverage. Caches the tools write as they run are skipped too: `.pytest_cache`, `.hypothesis`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.nox`, `.cpcache`, `.nyc_output`, `htmlcov`, and `.coverage` / `.coverage.*` files. The fingerprint is taken before and after the coverage commands; when a file changed while they ran, nothing from that run is stamped, because the reports may describe the old content. `files` lists the source files that run covered. `crapper.runners.stale_files(root, files, coverage_command)` returns the files whose reports cannot be trusted: no stamp, a different `--coverage-command`, a changed tree, or a file outside the covered set. mutator can use it to skip regenerating coverage crapper has just produced.
 
 ## Coverage failure gate
 
