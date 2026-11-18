@@ -245,8 +245,13 @@ def _rocks_installed(script: str) -> dict[str, str]:
     return rocks
 
 
-def test_the_two_setup_scripts_install_the_same_rocks():
-    """A rock one setup script installs and the other does not is a platform that silently skips its tests."""
+def test_the_supported_setup_installs_every_rock_the_linux_script_does():
+    """setup-windows.ps1 is the only installation path; setup-ubuntu.sh is the kept Linux entry point.
+
+    The check still runs both ways, because a rock one script pins and the other
+    does not is a host that silently skips the Lua tests needing it — and that
+    host is now Windows, which has no second setup path to fall back on.
+    """
 
     ubuntu = _rocks_installed((ROOT / "scripts" / "setup-ubuntu.sh").read_text(encoding="utf-8"))
     windows = _rocks_installed((ROOT / "scripts" / "setup-windows.ps1").read_text(encoding="utf-8"))
@@ -254,19 +259,23 @@ def test_the_two_setup_scripts_install_the_same_rocks():
     missing = sorted(set(ubuntu) - set(windows))
     assert not missing, (
         "scripts/setup-windows.ps1 does not install " + ", ".join(missing)
-        + ", so Windows skips the Lua tests that need them"
+        + ", so Windows — the only installation path — skips the Lua tests that need them"
     )
     unexpected = sorted(set(windows) - set(ubuntu) - WINDOWS_ONLY_ROCKS)
     assert not unexpected, (
         "scripts/setup-windows.ps1 installs " + ", ".join(unexpected)
-        + ", which setup-ubuntu.sh does not; add it there, or to WINDOWS_ONLY_ROCKS with the reason"
+        + ", which the Linux entry point does not; add it to setup-ubuntu.sh, or to "
+        "WINDOWS_ONLY_ROCKS with the reason"
     )
     mismatched = sorted(
         f"{rock}: {ubuntu[rock]} in setup-ubuntu.sh, {windows[rock]} in setup-windows.ps1"
         for rock in set(ubuntu) & set(windows)
         if ubuntu[rock] != windows[rock]
     )
-    assert not mismatched, "The two setup scripts pin different versions: " + " | ".join(mismatched)
+    assert not mismatched, (
+        "The two setup scripts pin different rocks at different versions, so Windows and the "
+        "Linux entry point measure Lua differently: " + " | ".join(mismatched)
+    )
 CONTINUED = "sudo luarocks --lua-version=5.4 " + "\\" + "\n  install luacov\n"
 
 

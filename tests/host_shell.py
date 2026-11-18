@@ -1,7 +1,8 @@
 """Custom coverage commands for the shell crapper hands them to on this host.
 
-`--coverage-command` runs in the platform shell: sh on Linux, cmd.exe on
-Windows. Fixtures build their commands here so the same test runs on both.
+`--coverage-command` runs in the platform shell: cmd.exe on the supported host,
+sh on the kept Linux development entry point. Fixtures build their commands here
+so one test covers both spellings.
 """
 
 import os

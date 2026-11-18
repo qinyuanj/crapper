@@ -14,10 +14,14 @@ CRAP = CC² × (1 − coverage)³ + CC
 
 ## Run
 
-```bash
-./crapper          # Linux, WSL2
+```bat
 crapper.cmd        # native Windows, from cmd or PowerShell
 ```
+
+Native Windows x64 is the only host crapper supports. `./crapper` runs the same
+entry point as a POSIX shell script; it stays for crapper's Linux development
+entry point, which is not an installation path for a supported host
+(`docs/adr/0005-keep-the-linux-development-entry-point.md`).
 
 The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, `target`, and nested checkouts (a directory below the root with its own `.git`, such as a worktree under `.agents/worktrees/`), and writes two results:
 
@@ -230,7 +234,7 @@ Built-in Lua enumerates every module's existing `target/coverage/lua[/<module-sl
 
 Fresh custom and Lua LCOV must contain at least one completed `SF` record, positive unique `DA` line numbers with nonnegative hit counts, and exactly one consistent `LF`/`LH` count per source. Optional DA MD5 checksums and standard function/branch metadata are accepted; counts may appear in either order. A completed `LF:0`/`LH:0` record is valid. Empty, incomplete, unreadable, duplicate-source, or malformed output fails with exit **1** before publication. Every `SF` must resolve to a readable regular file: relative custom paths resolve against `--root`, relative built-in Lua paths against that module's Busted working directory. Absolute paths and forward or backward separators work; source paths are never guessed from the report directory or suffix searches. Custom commands that change directories must emit absolute or project-relative source paths. Built-in Lua coverage uses canonical paths and ignores alternate stale Lua reports even in mixed-language projects.
 
-Custom command strings retain shell syntax and run from `--root` through the host shell: `/bin/sh` on Linux, `cmd.exe` on native Windows. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
+Custom command strings retain shell syntax and run from `--root` through the host shell, which is `cmd.exe` on the supported host. Paths and arguments containing spaces need quoting. Built-in Lua tools run as argument vectors in the selected interpreter. Command failure, Lua failure stages, and paths containing spaces are covered by real CLI acceptance tests.
 
 A metric threshold failure is a different result: `--threshold` exits **2** after successful analysis has published a valid snapshot. Other language runners retain their warning-and-N/A behavior, except under `--full-tree`.
 
@@ -238,13 +242,10 @@ When coverage was requested and some functions have N/A coverage, stderr counts 
 
 ## Native Windows
 
-crapper runs natively on Windows 10 and 11 whatever their build number: the
-decision is the OS itself, not a Windows build floor, so an older feature
-update runs like any other. That is not a support or security commitment for a
-build Microsoft no longer services. Use native Windows when the project's tests
-only pass in a native Windows process (Rust with the MSVC toolchain and
-`cfg(windows)`, Python calling Win32 APIs), or when WSL is unavailable;
-otherwise WSL2 below works as well.
+crapper runs on native Windows x64, on Windows 10 and 11 whatever their build
+number: the decision is the OS itself, not a Windows build floor, so an older
+feature update runs like any other. That is not a support or security
+commitment for a build Microsoft no longer services.
 
 1. Install Python 3.11+ (`python` on PATH) and the coverage tools your
    languages need: `cargo` (MSVC; crapper installs `cargo-llvm-cov`), Node.js,
@@ -253,12 +254,14 @@ otherwise WSL2 below works as well.
    installs LuaRocks, busted, luacov, cluacov 1.0.0 and luacov-reporter-lcov,
    and persists `PATH`, `LUA_PATH` and `LUA_CPATH` as user environment
    variables. It needs no administrator prompt and no WSL; open a new shell
-   after it. Without it the Lua tests skip rather than fail.
+   after it. Without it the Lua tests skip rather than fail, so CI runs this
+   script first and lets its own checks fail the job when the install does not
+   prove itself.
 2. From the project root, run `crapper.cmd` from this checkout. It creates `.venv\Scripts\` on
    first use. A project's own `.venv\Scripts\python.exe` is used for its
-   Python coverage, as `.venv/bin/python` is on Linux.
+   Python coverage.
 
-The snapshot is byte-for-byte the one Linux writes for the same project:
+The snapshot is byte-for-byte the same wherever the project sits:
 module names use `.`/`::` with no drive letter or backslash, lines end with
 LF whatever `core.autocrlf` says, and the file is replaced atomically. If an
 editor holds the old snapshot open, publication retries for a few seconds,
@@ -282,36 +285,23 @@ Limits:
 - Analysis of 64 or more files starts its worker processes fresh, since
   Windows has no fork; results are the same, only slower to start.
 
-## WSL2
+## Other hosts
 
-1. In an administrator PowerShell, run `wsl --install` and reboot.
-2. Open Ubuntu and clone into the Linux home directory, not `/mnt/c`.
-   Windows drives are slow under WSL2 and break symlinks:
+Linux x64 is not a supported host either. The delivery platform decision leaves
+native Windows x64 alone, because the loop's declaration, its CI and its
+release artifacts have to name the same host.
 
-   ```bash
-   cd ~
-   git clone -b lua https://github.com/qinyuanj/crapper.git
-   ```
-
-3. Run `crapper/scripts/setup-ubuntu.sh`. It installs Python, Lua 5.4,
-   busted, luacov, cluacov 1.0.0, luacov-reporter-lcov, and Babashka, then
-   creates `.venv`.
-4. Edit in VS Code with the WSL extension (`code .` from Ubuntu).
-
-Under WSL2, crapper warns when the project is under `/mnt/`.
+`scripts/setup-ubuntu.sh` stays as crapper's own Linux development entry point:
+a way to run this suite on Linux without claiming a delivery host, which its CI
+may still use. It is not an installation path. The POSIX branches in
+`src/crapper/platform.py` and the `/mnt/` warning in `src/crapper/cli.py` stay
+with it, unreachable from the supported host and reachable from that entry
+point; they are the way back to Linux support, so deleting them is a separate
+decision, recorded in `docs/adr/0005-keep-the-linux-development-entry-point.md`.
 
 ## Development
 
-Prepare and verify an environment for the current checkout:
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/python -m ruff check
-.venv/bin/python -m pytest
-```
-
-On native Windows, use PowerShell:
+Prepare and verify an environment for the current checkout, in PowerShell:
 
 ```powershell
 python -m venv .venv
@@ -324,9 +314,9 @@ Tests that need to create symlinks skip unless Developer Mode is on.
 
 `scripts/bench.py` times the three refresh modes on a copy of a project and compares each snapshot byte for byte with recorded references:
 
-```bash
-.venv/bin/python scripts/bench.py /tmp/copy --reference /tmp/ref --record -- --source-root src
-.venv/bin/python scripts/bench.py /tmp/copy --reference /tmp/ref -- --source-root src
+```powershell
+& .venv\Scripts\python.exe scripts\bench.py $env:TEMP\copy --reference $env:TEMP\ref --record -- --source-root src
+& .venv\Scripts\python.exe scripts\bench.py $env:TEMP\copy --reference $env:TEMP\ref -- --source-root src
 ```
 
 Local runs without the Lua toolchain can skip integration tests, so check the pytest summary before claiming Lua coverage was validated.

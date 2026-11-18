@@ -295,7 +295,12 @@ def select_files(options: Options) -> list[Path]:
 
 
 def platform_warning(platform: str, root: Path) -> str | None:
-    """Suggest the Linux filesystem for Windows-mounted projects under WSL2."""
+    """Suggest the Linux filesystem for Windows-mounted projects under WSL2.
+
+    Linux is not a supported host, so this never fires in a delivery run. It is
+    kept with the Linux development entry point, which is where a project under
+    `/mnt/` still meets the slow drive and its broken symlinks.
+    """
 
     if platform != "win32" and root.as_posix().startswith("/mnt/"):
         return (

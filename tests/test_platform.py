@@ -33,10 +33,19 @@ def test_native_windows_paths_are_quiet():
 
 
 def test_windows_drive_under_wsl_suggests_the_linux_filesystem():
+    """The WSL2 warning, specified though no delivery run reaches it.
+
+    Linux is not a supported host, so the `/mnt/` branch is unreachable from a
+    delivery run. It stays with the Linux development entry point, and this is
+    the specification it has to keep.
+    """
+
     assert "under ~/" in platform_warning("linux", Path("/mnt/c/proj"))
 
 
 def test_linux_filesystem_paths_are_quiet():
+    """The same unreachable path stays quiet off a Windows-mounted drive."""
+
     assert platform_warning("linux", Path("/home/me/proj")) is None
 
 def test_captured_output_is_text_unless_bytes_are_asked_for(tmp_path):

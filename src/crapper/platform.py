@@ -1,7 +1,9 @@
-"""What differs between the hosts crapper runs on: Linux and native Windows.
+"""What differs between native Windows, the host crapper supports, and POSIX.
 
 Every OS-specific decision lives here, selected once from `sys.platform`, so
-analysis and report code stay platform-agnostic.
+analysis and report code stay platform-agnostic. The POSIX branches are kept
+with the Linux development entry point (`scripts/setup-ubuntu.sh`): they run
+there and on no supported host, and they are the way back to Linux support.
 """
 
 from __future__ import annotations
