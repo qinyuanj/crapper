@@ -20,30 +20,10 @@ WINDOWS = sys.platform == "win32"
 # Windows has no fork, so its workers start fresh and load parsers themselves.
 POOL_START_METHOD = "spawn" if WINDOWS else "fork"
 
-# Windows 10 22H2. Older builds are refused before any work.
-MINIMUM_WINDOWS_BUILD = 19045
-
 # Where a virtual environment keeps its interpreter, and the interpreter to use
 # without one. Windows has no python3.exe outside the Microsoft Store alias.
 VENV_PYTHON = Path("Scripts", "python.exe") if WINDOWS else Path("bin", "python")
 DEFAULT_PYTHON = "python" if WINDOWS else "python3"
-
-
-def windows_build() -> int | None:
-    """The host's Windows build number, or None off Windows."""
-
-    return sys.getwindowsversion().build if WINDOWS else None
-
-
-def refusal(platform: str, build: int | None) -> str | None:
-    """Why crapper will not run on `platform` at Windows `build`, or None when it will."""
-
-    if platform != "win32" or build is None or build >= MINIMUM_WINDOWS_BUILD:
-        return None
-    return (
-        f"crapper needs Windows 10 22H2 (build {MINIMUM_WINDOWS_BUILD}) or later; "
-        f"this is build {build}. Update Windows, or run crapper inside WSL2."
-    )
 
 
 # Windows refuses to replace a file another process holds open without

@@ -19,7 +19,7 @@ from crapper.discover import (
     under_roots,
 )
 from crapper.metrics import metrics_path, write_metrics
-from crapper.platform import lf_streams, refusal, windows_build
+from crapper.platform import lf_streams
 from crapper.report import format_report
 from crapper.runners import CoverageError, run_coverage
 
@@ -341,10 +341,6 @@ def run(argv: list[str] | None = None) -> int:
         print(options.message, file=stream, end="" if options.message.endswith("\n") else "\n")
         return options.exit_code
 
-    refused = refusal(sys.platform, windows_build())
-    if refused:
-        print(refused, file=sys.stderr)
-        return 1
     root = options.project_root.resolve()
     warning = platform_warning(sys.platform, root)
     if warning:

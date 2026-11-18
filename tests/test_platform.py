@@ -1,29 +1,20 @@
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-from crapper.cli import platform_warning
-from crapper.platform import MINIMUM_WINDOWS_BUILD, refusal, run
-
-
-def test_windows_11_runs_natively():
-    assert refusal("win32", 26220) is None
+from crapper.cli import platform_warning, run as run_cli
+from crapper.platform import run
 
 
-def test_windows_10_22h2_is_the_minimum_build():
-    assert MINIMUM_WINDOWS_BUILD == 19045
-    assert refusal("win32", 19045) is None
+def test_any_windows_build_runs(tmp_path, monkeypatch):
+    """A Windows host is decided by its OS, not by a build number; 19042 is Windows 10 20H2."""
 
+    project = tmp_path / "project"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "demo.py").write_text("def choose(x):\n    return 1 if x else 0\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "getwindowsversion", lambda: SimpleNamespace(build=19042), raising=False)
 
-def test_older_windows_is_refused_naming_the_minimum_build():
-    message = refusal("win32", 19044)
-    assert message == (
-        "crapper needs Windows 10 22H2 (build 19045) or later; this is build 19044. "
-        "Update Windows, or run crapper inside WSL2."
-    )
-
-
-def test_linux_is_never_refused():
-    assert refusal("linux", None) is None
+    assert run_cli(["--root", str(project), "--no-coverage"]) == 0
 
 
 def test_native_windows_paths_are_quiet():

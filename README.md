@@ -238,12 +238,13 @@ When coverage was requested and some functions have N/A coverage, stderr counts 
 
 ## Native Windows
 
-crapper runs natively on Windows 11 and on Windows 10 22H2 (build 19045) or
-later. Older builds are refused before any work, with exit status 1 and the
-minimum build named. Use native Windows when the project's tests only pass
-in a native Windows process (Rust with the MSVC toolchain and `cfg(windows)`,
-Python calling Win32 APIs), or when WSL is unavailable; otherwise WSL2 below
-works as well.
+crapper runs natively on Windows 10 and 11 whatever their build number: the
+decision is the OS itself, not a Windows build floor, so an older feature
+update runs like any other. That is not a support or security commitment for a
+build Microsoft no longer services. Use native Windows when the project's tests
+only pass in a native Windows process (Rust with the MSVC toolchain and
+`cfg(windows)`, Python calling Win32 APIs), or when WSL is unavailable;
+otherwise WSL2 below works as well.
 
 1. Install Python 3.11+ (`python` on PATH) and the coverage tools your
    languages need: `cargo` (MSVC; crapper installs `cargo-llvm-cov`), Node.js,
