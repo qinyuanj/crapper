@@ -299,8 +299,26 @@ ENTRY_POINT_ONLY_TOOLS = {
 }
 
 
+# The rock each tool arrives as when it arrives through LuaRocks. A mention is not an
+# install: `_mentions` also matches a comment, a header banner and a verify step, so a
+# row would stay green after the install line was deleted. The rock has to be in the
+# script's install lines as well. `Lua 5.4` and `LuaRocks` are built and unpacked
+# rather than installed this way, so they have no entry.
+ROCK_TOOLS = {
+    "Busted": "busted",
+    "LuaCov": "luacov",
+    "cluacov": "cluacov",
+    "luacov-reporter-lcov": "luacov-reporter-lcov",
+}
+
+
 def _mentions(text: str, tool: str) -> bool:
-    """Whether `text` names `tool` as a command, not as part of a longer word."""
+    """Whether `text` names `tool` as a command, not as part of a longer word.
+
+    A substring test cannot answer this: `luacov` is inside both `cluacov` and
+    `luacov-reporter-lcov`, so the `LuaCov` row failed only when every one of the
+    other spellings had gone too.
+    """
 
     return re.search(rf"(?<![\w.-]){re.escape(tool)}(?![\w.-])", text) is not None
 
@@ -310,11 +328,13 @@ def test_both_setup_scripts_provide_the_toolchain_the_suite_needs():
         "scripts/setup-ubuntu.sh": (ROOT / "scripts" / "setup-ubuntu.sh").read_text(encoding="utf-8"),
         "scripts/setup-windows.ps1": (ROOT / "scripts" / "setup-windows.ps1").read_text(encoding="utf-8"),
     }
+    installed = {name: _rocks_installed(text) for name, text in scripts.items()}
     missing = [
         f"{tool} in {name}"
         for tool, spellings in SHARED_TOOLS.items()
         for name, text in scripts.items()
-        if not any(spelling in text for spelling in spellings)
+        if not any(_mentions(text, spelling) for spelling in spellings)
+        or (tool in ROCK_TOOLS and ROCK_TOOLS[tool] not in installed[name])
     ]
     assert not missing, (
         "These setup scripts do not provide a tool the suite needs, so the host running them "

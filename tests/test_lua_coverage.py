@@ -158,9 +158,20 @@ def test_selected_sources_missing_from_the_report_get_zero_hit_records(tmp_path)
     assert measured == {str(reported.resolve()): {1: (1, 1)}}, "a reported record keeps its hits"
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="the unreportable name is Windows-only: Lua's io.open reads the UTF-8 name in the "
+    "ANSI codepage, so only this host drops the file LuaCov was told to record",
+)
 @pytest.mark.skipif(not all(shutil.which(tool) for tool in ("busted", "luacov")), reason="Lua tools unavailable")
 def test_a_selected_source_luacov_cannot_report_is_recorded_with_zero_hits(tmp_path):
-    """The name is not ASCII, so Lua's stdio cannot open it on Windows; ADR 0006 keeps the row."""
+    """The name is not ASCII, so Lua's stdio cannot open it on Windows; ADR 0006 keeps the row.
+
+    Windows-only on purpose. On POSIX LuaCov's own `includeuntestedfiles` supplies the
+    record, so the test passed there whether or not `_zero_hit_records` existed — a gate
+    that could not fail. Here the reporter drops the file, and only crapper's synthesis
+    can put the row back.
+    """
 
     _write(tmp_path, ".busted", "return {default = {lpath = 'src/?.lua'}}")
     used = _write(tmp_path, "src/used.lua", "return {value = 42}\n")

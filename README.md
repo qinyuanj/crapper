@@ -288,16 +288,19 @@ Limits:
 ## Other hosts
 
 Linux x64 is not a supported host either. The delivery platform decision leaves
-native Windows x64 alone, because the loop's declaration, its CI and its
-release artifacts have to name the same host.
+native Windows x64 as the only one, because the loop's declaration, its CI and
+its release artifacts have to name the same host.
 
 `scripts/setup-ubuntu.sh` stays as crapper's own Linux development entry point:
-a way to run this suite on Linux without claiming a delivery host, which its CI
-may still use. It is not an installation path. The POSIX branches in
-`src/crapper/platform.py` and the `/mnt/` warning in `src/crapper/cli.py` stay
-with it, unreachable from the supported host and reachable from that entry
-point; they are the way back to Linux support, so deleting them is a separate
-decision, recorded in `docs/adr/0005-keep-the-linux-development-entry-point.md`.
+a way to run this suite on Linux without claiming a delivery host. It is not an
+installation path. The POSIX branches in `src/crapper/platform.py` and the
+`/mnt/` warning in `src/crapper/cli.py` stay with it, unreachable from the
+supported host and reachable from that entry point; they are the way back to
+Linux support, so deleting them is a separate decision, recorded in
+`docs/adr/0005-keep-the-linux-development-entry-point.md`. Their cost is
+coverage: CI runs on Windows, so none of them — nor the `sh` spelling in
+`tests/host_shell.py` — has a lane anywhere, and a change there can break
+without a red build.
 
 ## Development
 
