@@ -2,17 +2,28 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import crapper.platform
 from crapper.cli import platform_warning, run as run_cli
 from crapper.platform import run
 
 
 def test_any_windows_build_runs(tmp_path, monkeypatch):
-    """A Windows host is decided by its OS, not by a build number; 19042 is Windows 10 20H2."""
+    """A Windows host is decided by its OS, not by a build number; 19042 is Windows 10 20H2.
+
+    Both halves of the decision are patched: `sys.platform`, which the CLI reads,
+    and `crapper.platform.WINDOWS`, which is bound from it at import. Patching the
+    build alone would leave the body on the Linux path of a Linux runner, where no
+    Windows refusal fires and a reintroduced build floor would still pass.
+    """
 
     project = tmp_path / "project"
     (project / "src").mkdir(parents=True)
     (project / "src" / "demo.py").write_text("def choose(x):\n    return 1 if x else 0\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(crapper.platform, "WINDOWS", True)
     monkeypatch.setattr(sys, "getwindowsversion", lambda: SimpleNamespace(build=19042), raising=False)
+
+    assert crapper.platform.WINDOWS, "the Windows decision has to be the one this test exercises"
 
     assert run_cli(["--root", str(project), "--no-coverage"]) == 0
 
