@@ -247,9 +247,12 @@ works as well.
 
 1. Install Python 3.11+ (`python` on PATH) and the coverage tools your
    languages need: `cargo` (MSVC; crapper installs `cargo-llvm-cov`), Node.js,
-   Go, Maven, and for Lua, Lua 5.4 with LuaRocks, busted, luacov,
-   luacov-reporter-lcov and cluacov 1.0.0 (`luarocks --lua-version=5.4 install
-   cluacov 1.0.0-1`).
+   Go, Maven, and for Lua run `crapper\scripts\setup-windows.ps1` once. It
+   builds Lua 5.4 with a MinGW toolchain it unpacks into `%USERPROFILE%\.local`,
+   installs LuaRocks, busted, luacov, cluacov 1.0.0 and luacov-reporter-lcov,
+   and persists `PATH`, `LUA_PATH` and `LUA_CPATH` as user environment
+   variables. It needs no administrator prompt and no WSL; open a new shell
+   after it. Without it the Lua tests skip rather than fail.
 2. From the project root, run `crapper.cmd` from this checkout. It creates `.venv\Scripts\` on
    first use. A project's own `.venv\Scripts\python.exe` is used for its
    Python coverage, as `.venv/bin/python` is on Linux.

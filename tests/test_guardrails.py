@@ -5,6 +5,7 @@ Fast and tool-free, so the pre-commit hook runs them on every commit.
 
 import ast
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -128,3 +129,111 @@ def test_golden_files_are_checked_out_with_lf():
         + "\nFix: keep `*.edn` and `tests/fixtures/**` as `text eol=lf` in .gitattributes, then delete "
         "those working copies and re-checkout them: git checkout -- <files>"
     )
+
+
+_MESSAGE_COMMANDS = {"throw", "Write-Host", "Write-Output", "echo"}
+_VALUE_FLAGS = {"--tree", "--lua-version", "--deps-mode", "--server", "--namespace"}
+_ROCK_VERSION = re.compile(r"\d[\w.-]*\Z")
+
+# luafilesystem is named only on Windows: LuaCov loads lfs directly there, before
+# Busted resolves its own dependency on it.
+WINDOWS_ONLY_ROCKS = {"luafilesystem"}
+
+
+def _command_lines(script: str) -> list[str]:
+    """The script's lines with shell backslash continuations joined."""
+
+    lines: list[str] = []
+    pending = ""
+    for line in script.splitlines():
+        if line.rstrip().endswith("\\"):
+            pending += line.rstrip()[:-1] + " "
+            continue
+        lines.append(pending + line)
+        pending = ""
+    if pending:
+        lines.append(pending)
+    return lines
+
+
+def _rocks_installed(script: str) -> dict[str, str]:
+    """Rock name -> pinned version for every luarocks install command of a setup script."""
+
+    rocks: dict[str, str] = {}
+    for line in _command_lines(script):
+        try:
+            words = shlex.split(line, comments=True)
+        except ValueError:
+            continue
+        # A message that names luarocks is not an install, and an apt-get line that
+        # installs luarocks itself is not one either: luarocks must be the command.
+        if not words or words[0].startswith("#") or words[0] in _MESSAGE_COMMANDS:
+            continue
+        if "install" not in words:
+            continue
+        installing = words.index("install")
+        if not any(word.lower().endswith(("luarocks", "luarocks.exe")) for word in words[:installing]):
+            continue
+        rock = ""
+        rest = words[installing + 1:]
+        while rest:
+            word = rest.pop(0)
+            if word.startswith("-"):
+                if word in _VALUE_FLAGS and rest:
+                    rest.pop(0)
+                continue
+            if word.startswith("$"):
+                continue  # a variable, not a rock this test can compare
+            if rock and _ROCK_VERSION.match(word):
+                rocks[rock] = word
+                continue
+            rock = word
+            rocks.setdefault(rock, "")
+    return rocks
+
+
+def test_the_two_setup_scripts_install_the_same_rocks():
+    """A rock one setup script installs and the other does not is a platform that silently skips its tests."""
+
+    ubuntu = _rocks_installed((ROOT / "scripts" / "setup-ubuntu.sh").read_text(encoding="utf-8"))
+    windows = _rocks_installed((ROOT / "scripts" / "setup-windows.ps1").read_text(encoding="utf-8"))
+    assert ubuntu, "no luarocks install line was found in scripts/setup-ubuntu.sh"
+    missing = sorted(set(ubuntu) - set(windows))
+    assert not missing, (
+        "scripts/setup-windows.ps1 does not install " + ", ".join(missing)
+        + ", so Windows skips the Lua tests that need them"
+    )
+    unexpected = sorted(set(windows) - set(ubuntu) - WINDOWS_ONLY_ROCKS)
+    assert not unexpected, (
+        "scripts/setup-windows.ps1 installs " + ", ".join(unexpected)
+        + ", which setup-ubuntu.sh does not; add it there, or to WINDOWS_ONLY_ROCKS with the reason"
+    )
+    mismatched = sorted(
+        f"{rock}: {ubuntu[rock]} in setup-ubuntu.sh, {windows[rock]} in setup-windows.ps1"
+        for rock in set(ubuntu) & set(windows)
+        if ubuntu[rock] != windows[rock]
+    )
+    assert not mismatched, "The two setup scripts pin different versions: " + " | ".join(mismatched)
+CONTINUED = "sudo luarocks --lua-version=5.4 " + "\\" + "\n  install luacov\n"
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        ("luarocks install busted\n", {"busted": ""}),
+        ("luarocks install --force busted\n", {"busted": ""}),
+        ("luarocks install busted luacov\n", {"busted": "", "luacov": ""}),
+        ("luarocks install cluacov 1.0.0-1\n", {"cluacov": "1.0.0-1"}),
+        ("luarocks install 'cluacov' '1.0.0-1'\n", {"cluacov": "1.0.0-1"}),
+        ("sudo luarocks --lua-version=5.4 --tree ~/.luarocks install --deps-mode none luacov-reporter-lcov\n",
+         {"luacov-reporter-lcov": ""}),
+        (CONTINUED, {"luacov": ""}),
+        ('throw "luarocks install $Name exited $ExitCode"' + "\n", {}),
+        ("ROCK=luacov; luarocks install $ROCK\n", {}),
+        ("# luarocks install a rock by hand\n", {}),
+    ],
+)
+def test_rocks_are_found_through_any_install_spelling(script: str, expected: dict[str, str]):
+    """The guardrail is only as good as the spellings it reads, so each of these has to survive."""
+
+    assert _rocks_installed(script) == expected
