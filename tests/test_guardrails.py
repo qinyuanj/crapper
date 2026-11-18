@@ -1,6 +1,6 @@
 """Repository rules that review kept catching by hand.
 
-Fast and tool-free, so the pre-commit hook runs them on every commit.
+Fast and tool-free, so CI runs them on every push.
 """
 
 import ast
@@ -129,6 +129,59 @@ def test_golden_files_are_checked_out_with_lf():
         + "\nFix: keep `*.edn` and `tests/fixtures/**` as `text eol=lf` in .gitattributes, then delete "
         "those working copies and re-checkout them: git checkout -- <files>"
     )
+
+
+_WILDCARD = re.compile(r"[*?\[]")
+
+
+def _dead_directory_diagnoses(attributes: str) -> list[str]:
+    """One diagnosis string per .gitattributes rule whose literal directory is gone.
+
+    A diagnosis, not a directory: the value names the rule and the directory it
+    used to govern, because that is what the caller prints.
+    """
+
+    dead: list[str] = []
+    for line in attributes.splitlines():
+        words = line.split()
+        if not words or words[0].startswith("#"):
+            continue
+        pattern = words[0]
+        parts = pattern.split("/")[:-1]
+        for index, part in enumerate(parts):
+            if _WILDCARD.search(part):
+                break
+            directory = "/".join(parts[: index + 1])
+            if not (ROOT / directory).is_dir():
+                dead.append(pattern + ": " + directory + " is not a directory in this repo")
+                break
+    return dead
+
+
+def test_gitattributes_rules_name_directories_that_exist():
+    """A rule for a directory this repo no longer has governs nothing, and keeps a dead workflow looking current."""
+
+    dead = _dead_directory_diagnoses((ROOT / ".gitattributes").read_text(encoding="utf-8"))
+    assert not dead, (
+        "These .gitattributes rules name directories that are gone, so they govern nothing and keep a "
+        "removed workflow looking current:\n  " + "\n  ".join(dead) + "\nDelete each rule with the "
+        "directory it governed."
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("# a comment\ntests/fixtures/** text eol=lf\n", []),
+        ("*.edn text eol=lf\n*.cmd text eol=crlf\n", []),
+        (".githooks/** text eol=lf\n", [".githooks/**: .githooks is not a directory in this repo"]),
+        ("src/**/*.py text eol=lf\n", []),
+    ],
+)
+def test_dead_directories_are_found_through_any_rule_spelling(text: str, expected: list[str]):
+    """The guardrail is only as good as the spellings it reads, so each of these has to survive."""
+
+    assert _dead_directory_diagnoses(text) == expected
 
 
 _MESSAGE_COMMANDS = {"throw", "Write-Host", "Write-Output", "echo"}
