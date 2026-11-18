@@ -129,14 +129,53 @@ def test_selected_uncovered_files_are_relative_sorted_and_safe(tmp_path):
     lua = lua_interpreter()
     if lua is None:
         pytest.skip("Lua 5.4 unavailable")
-    assert run_shell([lua, "-e", "local c = dofile(arg[0]); assert(#c.includeuntestedfiles == 2); "
-                      "assert(c.includeuntestedfiles[1] == \"src/a]==] ü.lua\"); "
-                      "assert(c.includeuntestedfiles[2] == \"src/z 'quoted'.lua\")",
-                      "--", str(path)], tmp_path) == 0
+    # The assertion runs from a file rather than `lua -e`: Windows hands the
+    # interpreter its argv in the ANSI codepage, so `ü` arrives as different bytes
+    # than the UTF-8 config it is compared with. Inside a .lua file both are bytes
+    # the interpreter reads, so both hosts run the same comparison.
+    check = _write(
+        tmp_path,
+        "check.lua",
+        "local config = dofile(arg[1])\n"
+        "assert(#config.includeuntestedfiles == 2, #config.includeuntestedfiles)\n"
+        'assert(config.includeuntestedfiles[1] == "src/a]==] ü.lua", config.includeuntestedfiles[1])\n'
+        'assert(config.includeuntestedfiles[2] == "src/z \'quoted\'.lua", config.includeuntestedfiles[2])\n',
+    )
+    assert run_shell([lua, str(check), str(path)], tmp_path) == 0
+
+
+def test_selected_sources_missing_from_the_report_get_zero_hit_records(tmp_path):
+    """A selected source with no report record is zero coverage, not a missing row (ADR 0006)."""
+
+    from crapper import runners
+    reported = _write(tmp_path, "src/reported.lua", "return 1\n")
+    missing = _write(tmp_path, "src/missing ü.lua",
+                     "local M = {}\nfunction M.zero()\n return 99\nend\nreturn M\n")
+    measured = {str(reported.resolve()): {1: (1, 1)}}
+    records = runners._zero_hit_records([reported, missing], measured)
+    assert list(records) == [str(missing.resolve())]
+    assert records[str(missing.resolve())] == {line: (0, 1) for line in range(1, 6)}
+    assert measured == {str(reported.resolve()): {1: (1, 1)}}, "a reported record keeps its hits"
 
 
 @pytest.mark.skipif(not all(shutil.which(tool) for tool in ("busted", "luacov")), reason="Lua tools unavailable")
-def test_selected_unrequired_files_and_unrelated_broken_tree(tmp_path, monkeypatch):
+def test_a_selected_source_luacov_cannot_report_is_recorded_with_zero_hits(tmp_path):
+    """The name is not ASCII, so Lua's stdio cannot open it on Windows; ADR 0006 keeps the row."""
+
+    _write(tmp_path, ".busted", "return {default = {lpath = 'src/?.lua'}}")
+    used = _write(tmp_path, "src/used.lua", "return {value = 42}\n")
+    unused = _write(tmp_path, "src/unused ' ü]==].lua",
+                     "local M = {}\nfunction M.zero()\n return 99\nend\nreturn M\n")
+    _write(tmp_path, "spec/used_spec.lua", "it('works', function() assert.equals(42, require('used').value) end)\n")
+    records = run_coverage(tmp_path, [used, unused, unused], None).managed_lua
+    zero = next(lines for name, lines in records.items() if Path(name).resolve() == unused.resolve())
+    assert set(zero) == set(range(1, 6)) and all(hits == 0 for hits, _ in zero.values())
+    measured = next(lines for name, lines in records.items() if Path(name).resolve() == used.resolve())
+    assert any(hits > 0 for hits, _ in measured.values()), "a reported source keeps its measured hits"
+
+
+@pytest.mark.skipif(not all(shutil.which(tool) for tool in ("busted", "luacov")), reason="Lua tools unavailable")
+def test_an_unrelated_broken_tree_is_neither_scanned_nor_reported(tmp_path, monkeypatch):
     from crapper import runners
     commands = runners.lua_coverage_commands
     def without_directory_walk(lua, config):
@@ -148,14 +187,12 @@ def test_selected_unrequired_files_and_unrelated_broken_tree(tmp_path, monkeypat
     monkeypatch.setattr(runners, "lua_coverage_commands", without_directory_walk)
     _write(tmp_path, ".busted", "return {default = {lpath = 'src/?.lua'}}")
     used = _write(tmp_path, "src/used.lua", "return {value = 42}\n")
-    unused = _write(tmp_path, "src/unused ' ü]==].lua", "local M = {}\nfunction M.zero()\n return 99\nend\nreturn M\n")
     _write(tmp_path, "spec/used_spec.lua", "it('works', function() assert.equals(42, require('used').value) end)\n")
     _write(tmp_path, ".claude/worktrees/broken/bad.lua", "this is not valid Lua !!!\n")
-    bundle = run_coverage(tmp_path, [used, unused, unused], None)
-    records = bundle.managed_lua
-    zero = next(lines for name, lines in records.items() if Path(name).resolve() == unused.resolve())
-    assert zero and all(hits == 0 for hits, _ in zero.values())
-    assert not any("broken" in name for name in records)
+    records = run_coverage(tmp_path, [used], None).managed_lua
+    # The selected source is the only record: the broken tree below `.claude` was
+    # neither walked nor reported.
+    assert [Path(name).resolve() for name in records] == [used.resolve()]
 
 
 def test_lua_modules_only_receive_their_own_selected_files(tmp_path, monkeypatch):

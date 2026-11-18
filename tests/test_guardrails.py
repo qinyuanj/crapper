@@ -276,6 +276,79 @@ def test_the_supported_setup_installs_every_rock_the_linux_script_does():
         "The two setup scripts pin different rocks at different versions, so Windows and the "
         "Linux entry point measure Lua differently: " + " | ".join(mismatched)
     )
+
+
+# The toolchain each setup script must provide, whichever host runs the suite. Some tools
+# are spelled differently on the two hosts — `lua5.4` is Ubuntu's package, `lua.exe` the
+# interpreter setup-windows.ps1 builds — so each entry lists the spellings both scripts
+# use for the same thing. The rock comparison above cannot see any of these.
+SHARED_TOOLS = {
+    "Lua 5.4": ("lua5.4", "lua.exe"),
+    "LuaRocks": ("luarocks",),
+    "Busted": ("busted",),
+    "LuaCov": ("luacov",),
+    "cluacov": ("cluacov",),
+    "luacov-reporter-lcov": ("luacov-reporter-lcov",),
+}
+
+# Tools only the kept Linux development entry point provides, each with its reason.
+# `bb` is here because the suite reads the snapshot with its own EDN reader (ADR 0007),
+# so the supported host installs no second language runtime for one assertion.
+ENTRY_POINT_ONLY_TOOLS = {
+    "bb": "the suite reads EDN itself (ADR 0007), so the supported host does not install it",
+}
+
+
+def _mentions(text: str, tool: str) -> bool:
+    """Whether `text` names `tool` as a command, not as part of a longer word."""
+
+    return re.search(rf"(?<![\w.-]){re.escape(tool)}(?![\w.-])", text) is not None
+
+
+def test_both_setup_scripts_provide_the_toolchain_the_suite_needs():
+    scripts = {
+        "scripts/setup-ubuntu.sh": (ROOT / "scripts" / "setup-ubuntu.sh").read_text(encoding="utf-8"),
+        "scripts/setup-windows.ps1": (ROOT / "scripts" / "setup-windows.ps1").read_text(encoding="utf-8"),
+    }
+    missing = [
+        f"{tool} in {name}"
+        for tool, spellings in SHARED_TOOLS.items()
+        for name, text in scripts.items()
+        if not any(spelling in text for spelling in spellings)
+    ]
+    assert not missing, (
+        "These setup scripts do not provide a tool the suite needs, so the host running them "
+        "fails or skips what depends on it: " + ", ".join(missing)
+    )
+
+
+def test_tools_only_the_linux_entry_point_provides_are_declared_in_both_directions():
+    ubuntu = (ROOT / "scripts" / "setup-ubuntu.sh").read_text(encoding="utf-8")
+    windows = (ROOT / "scripts" / "setup-windows.ps1").read_text(encoding="utf-8")
+    for tool, reason in ENTRY_POINT_ONLY_TOOLS.items():
+        assert _mentions(ubuntu, tool), (
+            f"scripts/setup-ubuntu.sh no longer provides {tool}, which is declared entry-point "
+            f"only ({reason}); update the declaration"
+        )
+        assert not _mentions(windows, tool), (
+            f"scripts/setup-windows.ps1 now provides {tool}, which is declared entry-point only "
+            f"({reason}); add it to SHARED_TOOLS or drop the declaration"
+        )
+
+
+@pytest.mark.parametrize(
+    ("text", "tool", "expected"),
+    [
+        ("command -v bb >/dev/null", "bb", True),
+        ('sudo install -m 755 "$tmp/bb" /usr/local/bin/bb', "bb", True),
+        ("tar -xzf bb.tgz", "bb", False),
+        ("runs core.bb and bb.edn tasks", "bb", False),
+    ],
+)
+def test_a_tool_is_recognised_as_a_command_not_as_part_of_another_word(text, tool, expected):
+    assert _mentions(text, tool) is expected
+
+
 CONTINUED = "sudo luarocks --lua-version=5.4 " + "\\" + "\n  install luacov\n"
 
 
