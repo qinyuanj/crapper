@@ -865,6 +865,7 @@ def _cover_lua(root: Path, files: list[Path], reports: list[tuple[Path, Path]], 
             code = run_shell(run_cmd, module)
         _record_lua_lcov(module, code, stats, report, lcov_cmd)
         fresh.update(_fresh_lcov(report, module))
+        fresh.update(_zero_hit_records(selected, fresh))
     return fresh
 
 
@@ -873,6 +874,32 @@ def _fresh_lcov(report: Path, source_base: Path) -> dict:
         return read_fresh_lcov(report, source_base)
     except (OSError, UnicodeError, ValueError) as exc:
         raise CoverageError(f"Required LCOV report invalid or unavailable: {report}: {exc}") from exc
+
+
+def _zero_hit_records(selected: list[Path], reported: dict) -> dict:
+    """Zero-hit records for selected sources the fresh report did not carry.
+
+    LuaCov drops an `includeuntestedfiles` entry it cannot open, and Lua's stdio
+    reads that name in the host ANSI codepage while crapper writes it as UTF-8, so
+    a source whose name is not ASCII can vanish from the report on Windows. The
+    source was still selected and nothing executed it, so it is recorded as zero
+    hits on every line (ADR 0006). A source the
+    report does carry keeps its measured lines.
+    """
+
+    known = {os.path.normcase(name) for name in reported}
+    records: dict[str, dict[int, tuple[int, int]]] = {}
+    for path in selected:
+        resolved = Path(path).resolve()
+        name = str(resolved)
+        if os.path.normcase(name) in known:
+            continue
+        try:
+            lines = len(resolved.read_bytes().splitlines())
+        except OSError as exc:
+            raise CoverageError(f"Cannot read selected Lua source {resolved}: {exc}") from exc
+        records[name] = dict.fromkeys(range(1, lines + 1), (0, 1))
+    return records
 
 
 def _invalidate_artifacts(paths: list[Path]) -> None:

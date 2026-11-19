@@ -1,7 +1,9 @@
-"""What differs between the hosts crapper runs on: Linux and native Windows.
+"""What differs between native Windows, the host crapper supports, and POSIX.
 
 Every OS-specific decision lives here, selected once from `sys.platform`, so
-analysis and report code stay platform-agnostic.
+analysis and report code stay platform-agnostic. The POSIX branches are kept
+with the Linux development entry point (`scripts/setup-ubuntu.sh`): they run
+there and on no supported host, and they are the way back to Linux support.
 """
 
 from __future__ import annotations
@@ -150,7 +152,10 @@ def run(command: str | list[str], cwd: Path, capture: bool = False,
     if capture:
         options.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if text:
-            options.update(text=True, errors="replace")
+            # Captured tools write UTF-8 to the pipe; decoding at the host ANSI
+            # code page instead (cp1252 on the CI runner) turned U+4E2D into four
+            # mojibake characters and reddened the suite (#16).
+            options.update(text=True, encoding="utf-8", errors="replace")
     argv = command if shell else resolve(command, cwd, env)
     if not WINDOWS:
         return subprocess.run(argv, timeout=timeout, **options)

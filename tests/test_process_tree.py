@@ -7,6 +7,7 @@ a Job Object and ends the job when the run is interrupted or crapper dies.
 
 import _thread
 import json
+import locale
 import os
 import subprocess
 import sys
@@ -83,6 +84,29 @@ def test_batch_arguments_are_literal_through_npm_style_percent_star(tmp_path):
                  env={**os.environ, 'SPEC_LITERAL_ARG': 'expanded'})
     assert result.returncode == 0
     assert json.loads(result.stdout) == arguments
+
+
+def test_captured_utf8_is_read_as_utf8_whatever_the_ansi_code_page(tmp_path, monkeypatch):
+    """A non-UTF-8 host code page must not reinterpret a captured tool's UTF-8.
+
+    windows-latest decodes pipes at cp1252, so the non-ASCII argument above came
+    back as mojibake there (issue #16) while a CJK host and a UTF-8-mode
+    interpreter passed. Forcing the code page subprocess reads makes every host
+    decode the way that runner does.
+    """
+
+    from crapper.platform import run
+
+    emitter = tmp_path / "emit.py"
+    emitter.write_text(
+        "import json, sys\n"
+        "sys.stdout.buffer.write(json.dumps(['中'], ensure_ascii=False).encode('utf-8'))\n",
+        encoding="utf-8")
+    monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "cp1252", raising=False)
+    result = run([sys.executable, str(emitter)], tmp_path, capture=True)
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == ["中"]
 
 
 def test_batch_arguments_are_literal_in_an_argv_command(tmp_path):

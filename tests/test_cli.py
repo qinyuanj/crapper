@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from edn import Keyword, read_edn
+
 from crapper.cli import HELP, _positionals, _take, main, parse_args, run, select_files
 from crapper.discover import language_of
 from crapper.runners import CoverageError
@@ -71,26 +73,20 @@ def test_project_snapshot_is_readable_as_crap4clj_edn(tmp_path):
     assert "should-skip" not in text
     assert "TestPlace" not in text
 
-    reader = subprocess.run(
-        [
-            "bb",
-            "-e",
-            (
-                "(require '[clojure.edn :as edn])"
-                "(let [data (edn/read-string (slurp *in*))]"
-                " (doseq [entry (:entries data)]"
-                "   (println (:namespace entry) (:name entry)"
-                "            (:complexity entry) (pr-str (:coverage entry)))))"
-            ),
-        ],
-        input=text,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert reader.returncode == 0, reader.stderr
-    assert "demo.core choose 2 nil" in reader.stdout
-    assert "demo.Board place 3 nil" in reader.stdout
+    # Read the snapshot with the suite's own EDN reader (ADR 0007), not Babashka:
+    # the contract is with an EDN reader, and both hosts must check it the same way.
+    snapshot = read_edn(text)
+    assert set(snapshot) == {Keyword("entries")}
+    rows = {(row[Keyword("namespace")], row[Keyword("name")]): row
+            for row in snapshot[Keyword("entries")]}
+    keys = {Keyword("name"), Keyword("namespace"), Keyword("complexity"),
+            Keyword("coverage"), Keyword("crap")}
+    assert all(set(row) == keys for row in rows.values())
+    assert rows[("demo.core", "choose")][Keyword("complexity")] == 2
+    assert rows[("demo.core", "choose")][Keyword("coverage")] is None
+    assert rows[("demo.Board", "place")][Keyword("complexity")] == 3
+    assert rows[("demo.Board", "place")][Keyword("coverage")] is None
+    assert not any(name in {"should-skip", "TestPlace"} for _, name in rows)
 
 
 def test_existing_coverage_feeds_the_snapshot(tmp_path):
